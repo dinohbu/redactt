@@ -23,7 +23,7 @@ local autoExpEnabled = false
 -----------------------------------------------------------[Ui settings]-----------------------------------------------------------------------------------
 -- Create the main UI window and tabs first
 local Window = Library:CreateWindow({
-    Title = 'Redacted Hub', -- You can change this title if needed
+    Title = 'Poooo Hub', -- You can change this title if needed
     Center = true,
     AutoShow = true,
     TabPadding = 8,
