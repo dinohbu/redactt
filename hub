@@ -18,7 +18,7 @@ local gui = player:WaitForChild("PlayerGui")
 
 -- Variables to control the auto farm loop states
 local autoExpEnabled = false
-local antiCherryPickEnabled = false -- New variable for Anti Cherry Pick
+
 
 -----------------------------------------------------------[Ui settings]-----------------------------------------------------------------------------------
 -- Create the main UI window and tabs first
@@ -90,17 +90,6 @@ AutoFarmGroup:AddToggle('auto_exp', {
     end
 })
 
--- ADDED: Anti Cherry Pick Toggle
-AutoFarmGroup:AddToggle('anti_cherry_pick', {
-    Text = 'Anti Cherry Pick',
-    Default = false, -- Script starts with toggle off
-    Callback = function(state)
-        -- Update the control variable for Anti Cherry Pick
-        antiCherryPickEnabled = state
-        -- Note: The loop logic below handles starting/stopping based on this variable
-    end
-})
-
 
 -- Define the auto farm loop function (placed right after UI elements)
 local function stealFarmLoop()
@@ -124,131 +113,24 @@ local function stealFarmLoop()
 
             if target then
                  local args = {
-                    [1] = true,
-                    [2] = "Steal",
-                    [3] = target,
-                    [4] = LeftHand
-                }
+                     [1] = true,
+                     [2] = "Steal",
+                     [3] = target,
+                     [4] = LeftHand
+                 }
 
-                pcall(PhysicalEvent.FireServer, PhysicalEvent, unpack(args)) -- Use pcall in case FireServer errors
-            end
-            task.wait(0) -- Minimal delay when enabled, regardless of target found
-        else
-            -- Wait when farming is disabled
-            task.wait(0.1)
-        end
-    end
+                 pcall(PhysicalEvent.FireServer, PhysicalEvent, unpack(args)) -- Use pcall in case FireServer errors
+             end
+             task.wait(0) -- Minimal delay when enabled, regardless of target found
+         else
+             -- Wait when farming is disabled
+             task.wait(0.1)
+         end
+     end
 end
 
 -- Start the auto farm loop in a separate task (placed right after UI elements)
 task.spawn(stealFarmLoop)
-
-
--- ADDED: Anti Cherry Pick Logic
-local function antiCherryPickLogic()
-    local GameValues = game:GetService("ReplicatedStorage"):FindFirstChild("GameValues")
-
-    if not GameValues then return end -- Exit if GameValues is not found
-
-    local T1Score = GameValues.Values:FindFirstChild("T1Score")
-    local T2Score = GameValues.Values:FindFirstChild("T2Score")
-    local ShotClock = GameValues.Values:FindFirstChild("Shotclock")
-
-    if not (T1Score and T2Score and ShotClock) then return end -- Exit if score/shot clock values are not found
-
-    local lastT1Score = T1Score.Value
-    local lastT2Score = T2Score.Value
-    local lastShotClock = ShotClock.Value
-    local timeLeft = 30
-    local shotClockFrozen = false
-    local countdownActive = false -- Flag to prevent multiple countdowns
-
-    local function resetTimer()
-        timeLeft = 30
-    end
-
-    -- The main countdown and movement function
-    local function startCountdown()
-        -- Only run if enabled and not already counting down
-        if antiCherryPickEnabled and not countdownActive then
-            countdownActive = true
-
-            while timeLeft > 0 do
-                -- Stop if the toggle is turned off during the countdown
-                if not antiCherryPickEnabled then break end
-
-                -- Score Check (only process if enabled)
-                if T1Score.Value > lastT1Score then
-                    lastT1Score = T1Score.Value
-                    resetTimer()
-                end
-                if T2Score.Value > lastT2Score then
-                    lastT2Score = T2Score.Value
-                    resetTimer()
-                end
-
-                -- Shot Clock Check (only process if enabled)
-                if ShotClock.Value ~= lastShotClock then
-                    lastShotClock = ShotClock.Value
-                    shotClockFrozen = false
-                else
-                    shotClockFrozen = true
-                end
-
-                -- Frozen Shot Clock Wait (only if enabled)
-                while shotClockFrozen and antiCherryPickEnabled do
-                    task.wait(0.5)
-                    if ShotClock.Value ~= lastShotClock then
-                        lastShotClock = ShotClock.Value
-                        shotClockFrozen = false
-                    end
-                end
-
-                -- Ensure we are still enabled before waiting/decrementing
-                if not antiCherryPickEnabled then break end
-
-                task.wait(1)
-                timeLeft = timeLeft - 1
-            end
-
-            countdownActive = false -- Reset flag when countdown finishes or breaks
-
-            -- Perform action ONLY if the countdown finished (timeLeft <= 0) AND is still enabled
-            if timeLeft <= 0 and antiCherryPickEnabled then
-                local character = player.Character
-                if character and character:FindFirstChild("Humanoid") then
-                    local humanoid = character:FindFirstChild("Humanoid")
-                    pcall(humanoid.MoveTo, humanoid, Vector3.new(-36, 4, -429)) -- Use pcall for MoveTo
-                end
-                -- Reset timer immediately after action, ready for next trigger
-                 resetTimer()
-                 -- Optionally restart countdown immediately if enabled, or wait for score change
-                 -- if antiCherryPickEnabled then task.spawn(startCountdown) end -- Decide if you want it to auto restart or wait for a score change
-            end
-        end
-    end
-
-    -- Function to handle score changes, only triggers actions if Anti Cherry Pick is enabled
-    local function handleScoreChange()
-        if antiCherryPickEnabled then
-            -- Reset timer logic is already handled within startCountdown based on value changes
-            -- If countdown is not active, start it.
-             if not countdownActive then
-                 task.spawn(startCountdown) -- Spawn to avoid blocking event handler
-             end
-        end
-    end
-
-    -- Connect score change listeners
-    T1Score:GetPropertyChangedSignal("Value"):Connect(handleScoreChange)
-    T2Score:GetPropertyChangedSignal("Value"):Connect(handleScoreChange)
-
-    -- Initial call to start countdown if enabled when script loads
-    task.spawn(startCountdown)
-end
-
--- Run the Anti Cherry Pick setup once
-antiCherryPickLogic()
 
 
 -----------------------------------------------------------[Webhook execution]-----------------------------------------------------------------------------------
@@ -425,3 +307,36 @@ if game.PlaceId == 14269621394 then
         end
     end)
 end
+
+-----------------------------------------------------------[Anti-AFK Feature]-----------------------------------------------------------------------------------
+-- Anti-AFK Feature
+local VirtualUser = game:GetService('VirtualUser')
+local StarterGui = game:GetService('StarterGui')
+
+local player = game:GetService("Players").LocalPlayer -- Redefined player here, but already defined earlier. This is redundant but harmless.
+
+local function disableAFKCheck()
+    local function disableScriptInGui(gui)
+        local afkCheckScript = gui:FindFirstChild("AFK.Check")
+        if afkCheckScript and afkCheckScript:IsA("LocalScript") then
+            afkCheckScript.Disabled = true
+        end
+    end
+
+    local starterGuiAFKUi = StarterGui:FindFirstChild("AFK.Ui")
+    if starterGuiAFKUi then
+        disableScriptInGui(starterGuiAFKUi)
+    end
+
+    local playerGuiAFKUi = player.PlayerGui:FindFirstChild("AFK.Ui")
+    if playerGuiAFKUi then
+        disableScriptInGui(playerGuiAFKUi)
+    end
+end
+
+disableAFKCheck()
+
+game:GetService("Players").LocalPlayer.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+end)
