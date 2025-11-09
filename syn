@@ -1,0 +1,142 @@
+local Players = game:GetService('Players')
+local VirtualInputManager = game:GetService('VirtualInputManager')
+local localPlayer = Players.LocalPlayer
+
+-- ✅ List of your alts (15 slots used here)
+local altList = {
+    'TheGreatestTurtle12',
+    'TheGreatestTurtle13',
+    'TheGreatestTurtle14',
+    'TheGreatestTurtle15',
+    'TheGreatestTurtle16',
+    'TheGreatestTurtle18',
+    'TheGreatestTurtle19',
+    'TheGreatestTurtle20',
+    'TheGreatestTurtle21',
+    'TheGreatestTurtle22',
+    'dribblecurses',
+    'oooeeewq',
+    'osamasongamers',
+    'ssprinklez0a',
+}
+
+-- Teleport positions (tight square layout)
+local teleportPositions = {
+    Vector3.new(-16, 4, -10), -- leftmost moved closer
+    Vector3.new(-8, 4, -10),
+    Vector3.new(0, 4, -10),
+    Vector3.new(8, 4, -10),
+    Vector3.new(16, 4, -10), -- rightmost moved closer
+
+    Vector3.new(-16, 4, 0),
+    Vector3.new(-8, 4, 0),
+    Vector3.new(0, 4, 0),
+    Vector3.new(8, 4, 0),
+    Vector3.new(16, 4, 0),
+
+    Vector3.new(-16, 4, 10),
+    Vector3.new(-8, 4, 10),
+    Vector3.new(0, 4, 10),
+    Vector3.new(8, 4, 10),
+    Vector3.new(16, 4, 10),
+}
+
+-- Configuration
+getgenv().teleportInterval = 17 -- total time between teleports
+getgenv().preSpamDelay = 2
+getgenv().spamTime = 12
+getgenv().spamKey = Enum.KeyCode.Three
+local characterHeight = 7
+
+-- Check if player is in the alt list
+local function isAlt(name)
+    for _, v in pairs(altList) do
+        if v ~= '' and v:lower() == name:lower() then
+            return true
+        end
+    end
+    return false
+end
+
+-- Get alt index
+local function getAltIndex(name)
+    for i, v in pairs(altList) do
+        if v ~= '' and v:lower() == name:lower() then
+            return i
+        end
+    end
+    return nil
+end
+
+if isAlt(localPlayer.Name) then
+    print('Teleport + Key spam script running...')
+
+    task.spawn(function()
+        while true do
+            local startTime = os.clock()
+
+            local character = localPlayer.Character
+                or localPlayer.CharacterAdded:Wait()
+            local humanoid = character:WaitForChild('Humanoid')
+            local humanoidRootPart = character:WaitForChild('HumanoidRootPart')
+
+            if humanoidRootPart and humanoid then
+                local altIndex = getAltIndex(localPlayer.Name)
+                local teleportPosition = teleportPositions[altIndex]
+                    or Vector3.new(-10, 4, -5)
+
+                -- Spam teleport with zero delay until dead
+                local teleporting = true
+                local teleportTask
+                teleportTask = task.spawn(function()
+                    while teleporting and humanoid.Health > 0 do
+                        humanoidRootPart.CFrame = CFrame.new(
+                            teleportPosition
+                                + Vector3.new(0, characterHeight, 0)
+                        )
+                        task.wait() -- zero delay
+                    end
+                end)
+
+                -- Wait before starting key spam
+                task.wait(getgenv().preSpamDelay)
+
+                -- Spam key for spamTime seconds, stop if dead
+                local spamStart = os.clock()
+                while os.clock() - spamStart < getgenv().spamTime do
+                    if humanoid.Health <= 0 then
+                        break
+                    end
+                    VirtualInputManager:SendKeyEvent(
+                        true,
+                        getgenv().spamKey,
+                        false,
+                        game
+                    )
+                    task.wait(0.05)
+                    VirtualInputManager:SendKeyEvent(
+                        false,
+                        getgenv().spamKey,
+                        false,
+                        game
+                    )
+                    task.wait(0.05)
+                end
+
+                -- Stop teleport spam after death or spamTime
+                teleporting = false
+
+                -- Wait remaining time until next teleport interval
+                local elapsed = os.clock() - startTime
+                local remainingTime = getgenv().teleportInterval - elapsed
+                if remainingTime > 0 then
+                    task.wait(remainingTime)
+                end
+            else
+                task.wait(1)
+            end
+        end
+    end)
+else
+    print('This player is not in the alt list. Script will not run.')
+end
