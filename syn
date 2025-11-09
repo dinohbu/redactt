@@ -21,31 +21,28 @@ local altList = {
     'ssprinklez0a',
 }
 
--- Exception list: if your (injecting) username is on here, the script will do nothing.
--- Add usernames you want the script to ignore (case-insensitive).
+-- Exception list
 local exceptionList = {
     ''
 }
 
--- New/required list: script will only run if EVERY name in altList AND requiredList are present in the server.
+-- Required list
 local requiredList = {
     'psykoticpsykotic',
 }
 
--- Teleport positions (tight square layout)
+-- Teleport positions
 local teleportPositions = {
-    Vector3.new(-16, 4, -10), -- leftmost moved closer
+    Vector3.new(-16, 4, -10),
     Vector3.new(-8, 4, -10),
     Vector3.new(0, 4, -10),
     Vector3.new(8, 4, -10),
-    Vector3.new(16, 4, -10), -- rightmost moved closer
-
+    Vector3.new(16, 4, -10),
     Vector3.new(-16, 4, 0),
     Vector3.new(-8, 4, 0),
     Vector3.new(0, 4, 0),
     Vector3.new(8, 4, 0),
     Vector3.new(16, 4, 0),
-
     Vector3.new(-16, 4, 10),
     Vector3.new(-8, 4, 10),
     Vector3.new(0, 4, 10),
@@ -54,13 +51,13 @@ local teleportPositions = {
 }
 
 -- Configuration
-getgenv().teleportInterval = 17 -- total time between teleports
+getgenv().teleportInterval = 17
 getgenv().preSpamDelay = 2
 getgenv().spamTime = 12
 getgenv().spamKey = Enum.KeyCode.Three
 local characterHeight = 7
 
--- utilities
+-- Utilities
 local function nameEquals(a, b)
     if not a or not b then return false end
     return a:lower() == b:lower()
@@ -85,27 +82,25 @@ local function getAltIndex(name)
     return nil
 end
 
--- Check that every non-empty name in `list` is present in Players
-local function areAllAccountsPresent(list)
-    if not list or #list == 0 then return true end
+-- Returns a list of missing accounts
+local function getMissingAccounts(list)
+    local missing = {}
+    if not list or #list == 0 then return missing end
     for _, name in pairs(list) do
-        if name ~= '' then
-            local found = Players:FindFirstChild(name) ~= nil
-            if not found then
-                return false
-            end
+        if name ~= '' and Players:FindFirstChild(name) == nil then
+            table.insert(missing, name)
         end
     end
-    return true
+    return missing
 end
 
--- 1) If our local player is on the exception list -> exit immediately
+-- Exception check
 if isInList(localPlayer.Name, exceptionList) then
     warn('Local player is on the exception list. Script will not run for this account.')
     return
 end
 
--- 2) Local player must be in altList (so we know which teleportPositions index to use)
+-- Local player must be in altList
 if not isInList(localPlayer.Name, altList) then
     warn('Local player is not in altList. Script will not run.')
     return
@@ -116,18 +111,24 @@ print('Teleport + Key spam script initialized. Waiting for all required accounts
 
 task.spawn(function()
     while true do
-        -- require ALL names in altList AND requiredList to be present
-        local allPresent = areAllAccountsPresent(altList) and areAllAccountsPresent(requiredList)
-        if not allPresent then
-            -- pause and re-check in 5 seconds; the script won't perform teleports until condition is met
-            warn('Not all accounts from altList/requiredList are present. Rechecking in 5s...')
+        -- Check missing accounts
+        local missingAlt = getMissingAccounts(altList)
+        local missingReq = getMissingAccounts(requiredList)
+
+        if #missingAlt > 0 or #missingReq > 0 then
+            warn('The following accounts are missing:')
+            if #missingAlt > 0 then
+                warn('Missing from altList: ' .. table.concat(missingAlt, ', '))
+            end
+            if #missingReq > 0 then
+                warn('Missing from requiredList: ' .. table.concat(missingReq, ', '))
+            end
             task.wait(5)
             continue
         end
 
-        -- now that all are present, run the teleport + spam routine for this alt
+        -- All accounts present, run teleport + spam
         local startTime = os.clock()
-
         local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
         local humanoid = character:WaitForChild('Humanoid')
         local humanoidRootPart = character:WaitForChild('HumanoidRootPart')
@@ -136,24 +137,21 @@ task.spawn(function()
             local altIndex = getAltIndex(localPlayer.Name)
             local teleportPosition = teleportPositions[altIndex] or Vector3.new(-10, 4, -5)
 
-            -- Safety: if teleportPosition is not mapped, warn and skip this cycle
             if not teleportPosition then
                 warn('No teleport position found for this alt index. Skipping this cycle.')
             else
-                -- Spam teleport with zero delay until dead
                 local teleporting = true
-                local teleportTask
-                teleportTask = task.spawn(function()
+                task.spawn(function()
                     while teleporting and humanoid.Health > 0 do
                         humanoidRootPart.CFrame = CFrame.new(teleportPosition + Vector3.new(0, characterHeight, 0))
-                        task.wait() -- zero delay loop
+                        task.wait()
                     end
                 end)
 
-                -- Wait before starting key spam (but also ensure the required accounts are still present)
+                -- Pre-spam delay
                 local preStart = os.clock()
                 while os.clock() - preStart < getgenv().preSpamDelay do
-                    if not (areAllAccountsPresent(altList) and areAllAccountsPresent(requiredList)) then
+                    if #getMissingAccounts(altList) > 0 or #getMissingAccounts(requiredList) > 0 then
                         warn('Required accounts left during pre-spam delay. Stopping this run.')
                         teleporting = false
                         break
@@ -161,14 +159,12 @@ task.spawn(function()
                     task.wait(0.1)
                 end
 
-                -- Spam key for spamTime seconds, stop if dead or if required accounts leave
+                -- Spam key
                 if teleporting then
                     local spamStart = os.clock()
                     while os.clock() - spamStart < getgenv().spamTime do
-                        if humanoid.Health <= 0 then
-                            break
-                        end
-                        if not (areAllAccountsPresent(altList) and areAllAccountsPresent(requiredList)) then
+                        if humanoid.Health <= 0 then break end
+                        if #getMissingAccounts(altList) > 0 or #getMissingAccounts(requiredList) > 0 then
                             warn('Required accounts left during spam. Aborting spam early.')
                             break
                         end
@@ -179,16 +175,15 @@ task.spawn(function()
                     end
                 end
 
-                -- Stop teleport spam
                 teleporting = false
             end
 
-            -- Wait remaining time until next teleport interval (but if required accounts leave, we will break earlier)
+            -- Wait remaining time
             local elapsed = os.clock() - startTime
             local remainingTime = getgenv().teleportInterval - elapsed
             local waited = 0
             while remainingTime > 0 and waited < remainingTime do
-                if not (areAllAccountsPresent(altList) and areAllAccountsPresent(requiredList)) then
+                if #getMissingAccounts(altList) > 0 or #getMissingAccounts(requiredList) > 0 then
                     warn('Required accounts left during wait. Pausing until all are back.')
                     break
                 end
