@@ -23,13 +23,12 @@ local altList = {
 -- Exception list: if your (injecting) username is on here, the script will do nothing.
 -- Add usernames you want the script to ignore (case-insensitive).
 local exceptionList = {
-    'psykoticpsykotic'
+    ''
 }
 
 -- New/required list: script will only run if EVERY name in altList AND requiredList are present in the server.
 local requiredList = {
-    -- put extra account names here that must also be present
-    -- example: 'AltFriend1', 'AltFriend2'
+    'psykoticpsykotic', 'AltFriend2'
 }
 
 -- Teleport positions (tight square layout)
