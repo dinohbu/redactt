@@ -29,7 +29,7 @@ local exceptionList = {
 
 -- New/required list: script will only run if EVERY name in altList AND requiredList are present in the server.
 local requiredList = {
-    'psykoticpsykotic', 'AltFriend2'
+    'psykoticpsykotic',
 }
 
 -- Teleport positions (tight square layout)
