@@ -385,8 +385,8 @@ task.spawn(function()
     local THIRD_PLACE   = 6549794549
 
     local MAIN_TIME     = 4 * 60   -- 4 minutes
-    local OTHER_TIME    = 1 * 60   -- 1 minute
-    local THIRD_TIME    = 50       -- 50 seconds
+    local OTHER_TIME    = 35   -- 1 minute
+    local THIRD_TIME    = 35       -- 50 seconds
 
     local TeleportService = game:GetService("TeleportService")
     local LocalPlayer     = game:GetService("Players").LocalPlayer
