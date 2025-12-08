@@ -1,7 +1,7 @@
 -------------------------------------------------
 -- 🔰 FULL PLAYER LOAD BEFORE ANYTHING RUNS
 -------------------------------------------------
-wait(5)
+wait(8)
 repeat task.wait() until game:IsLoaded()
 
 local Players = game:GetService("Players")
