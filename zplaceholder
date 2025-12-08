@@ -381,7 +381,7 @@ end
 -------------------------------------------------
 task.spawn(function()
     local MAIN_PLACE = 7235817949
-    local OTHER_PLACE = 6549794549
+    local OTHER_PLACE = 13272886093
 
     local MAIN_TIME = 4 * 60  -- 4 minutes
     local OTHER_TIME = 1 * 60 -- 1 minute
