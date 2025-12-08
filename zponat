@@ -126,6 +126,23 @@ LocalPlayer.Idled:Connect(function()
     VirtualUser:ClickButton2(Vector2.new())
 end)
 
+-------------------------------------------------
+-- REMOVE “Loading.Ui” ALWAYS (PlaceId 7235817949)
+-------------------------------------------------
+if game.PlaceId == 7235817949 then
+    task.spawn(function()
+        while true do
+            task.wait(0.1)
+            local pg = Players.LocalPlayer:FindFirstChild("PlayerGui")
+            if pg then
+                local loading = pg:FindFirstChild("Loading.Ui")
+                if loading then
+                    loading:Destroy()
+                end
+            end
+        end
+    end)
+end
 
 -------------------------------------------------
 -- 🎮 BOT ARCADE LOGIC (FULLY DISABLED BY NONFRIENDS)
