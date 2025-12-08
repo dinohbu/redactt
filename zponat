@@ -25,8 +25,8 @@ _G.CONFIG = {
     Disabled = false,
     Main = "onnatredact",
     Mode = "Arcade",
-    Bots = { "combakeep","bla","cuteicecreamm" },
-    Badge = "LightsFinalTolI", -- or "ShootingAndDefense"
+    Bots = { "LightsFinalTolI","bla","cuteicecreamm" },
+    Badge = "FinishingAndDefensive", -- or "ShootingAndDefense"
 }
 
 _G.BlockArcade   = false
