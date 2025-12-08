@@ -377,31 +377,39 @@ then
 end
 
 -------------------------------------------------
--- ⏱️ PLACE TIMER → AUTO TELEPORT
+-- ⏱️ PLACE TIMER → AUTO TELEPORT (UPDATED)
 -------------------------------------------------
 task.spawn(function()
-    local MAIN_PLACE = 7235817949
-    local OTHER_PLACE = 13272886093
+    local MAIN_PLACE    = 7235817949
+    local OTHER_PLACE   = 13272886093
+    local THIRD_PLACE   = 6549794549
 
-    local MAIN_TIME = 4 * 60  -- 4 minutes
-    local OTHER_TIME = 1 * 60 -- 1 minute
+    local MAIN_TIME     = 4 * 60   -- 4 minutes
+    local OTHER_TIME    = 1 * 60   -- 1 minute
+    local THIRD_TIME    = 50       -- 50 seconds
 
     local TeleportService = game:GetService("TeleportService")
-    local LocalPlayer = game:GetService("Players").LocalPlayer
+    local LocalPlayer     = game:GetService("Players").LocalPlayer
 
     local timer = 0
 
     while task.wait(1) do
         timer += 1
 
-        -- If in MAIN place for 4 mins → go to OTHER place
+        -- MAIN_PLACE → OTHER_PLACE
         if game.PlaceId == MAIN_PLACE and timer >= MAIN_TIME then
             TeleportService:Teleport(OTHER_PLACE, LocalPlayer)
             break
         end
 
-        -- If in OTHER place for 1 min → go to MAIN place
+        -- OTHER_PLACE → MAIN_PLACE
         if game.PlaceId == OTHER_PLACE and timer >= OTHER_TIME then
+            TeleportService:Teleport(MAIN_PLACE, LocalPlayer)
+            break
+        end
+
+        -- THIRD_PLACE → MAIN_PLACE
+        if game.PlaceId == THIRD_PLACE and timer >= THIRD_TIME then
             TeleportService:Teleport(MAIN_PLACE, LocalPlayer)
             break
         end
