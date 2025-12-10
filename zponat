@@ -25,7 +25,7 @@ _G.CONFIG = {
     Disabled = false,
     Main = "onnatredact",
     Mode = "Arcade",
-    Bots = { "LightsFinalTolI","bla","cuteicecreamm" },
+    Bots = { "combakeep","LightsFinalTolI","cuteicecreamm" },
     Badge = "FinishingAndDefensive", -- or "ShootingAndDefense"
 }
 
@@ -43,6 +43,24 @@ local TeleportService     = game:GetService("TeleportService")
 local ReplicatedStorage   = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local Workspace           = game:GetService("Workspace")
+
+-------------------------------------------------
+-- UI REMOVER (AUTO DELETE LOADING SCREEN)
+-------------------------------------------------
+if game.PlaceId == 7235817949 then
+    task.spawn(function()
+        while true do
+            local pg = LocalPlayer:FindFirstChild("PlayerGui")
+            if pg then
+                local loading = pg:FindFirstChild("Loading.Ui")
+                if loading then
+                    loading:Destroy()
+                end
+            end
+            task.wait(0.1)
+        end
+    end)
+end
 
 
 -------------------------------------------------
@@ -126,23 +144,6 @@ LocalPlayer.Idled:Connect(function()
     VirtualUser:ClickButton2(Vector2.new())
 end)
 
--------------------------------------------------
--- REMOVE “Loading.Ui” ALWAYS (PlaceId 7235817949)
--------------------------------------------------
-if game.PlaceId == 7235817949 then
-    task.spawn(function()
-        while true do
-            task.wait(0.1)
-            local pg = Players.LocalPlayer:FindFirstChild("PlayerGui")
-            if pg then
-                local loading = pg:FindFirstChild("Loading.Ui")
-                if loading then
-                    loading:Destroy()
-                end
-            end
-        end
-    end)
-end
 
 -------------------------------------------------
 -- 🎮 BOT ARCADE LOGIC (FULLY DISABLED BY NONFRIENDS)
@@ -611,35 +612,3 @@ then
 
     end)
 end
-
--------------------------------------------------
--- ⏱️ PLACE TIMER → AUTO TELEPORT
--------------------------------------------------
-task.spawn(function()
-    local MAIN_PLACE = 7235817949
-    local OTHER_PLACE = 13272886093
-
-    local MAIN_TIME = 4 * 60  -- 4 minutes
-    local OTHER_TIME = 1 * 60 -- 1 minute
-
-    local TeleportService = game:GetService("TeleportService")
-    local LocalPlayer = game:GetService("Players").LocalPlayer
-
-    local timer = 0
-
-    while task.wait(1) do
-        timer += 1
-
-        -- If in MAIN place for 4 mins → go to OTHER place
-        if game.PlaceId == MAIN_PLACE and timer >= MAIN_TIME then
-            TeleportService:Teleport(OTHER_PLACE, LocalPlayer)
-            break
-        end
-
-        -- If in OTHER place for 1 min → go to MAIN place
-        if game.PlaceId == OTHER_PLACE and timer >= OTHER_TIME then
-            TeleportService:Teleport(MAIN_PLACE, LocalPlayer)
-            break
-        end
-    end
-end)
