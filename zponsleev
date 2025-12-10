@@ -1,0 +1,614 @@
+-------------------------------------------------
+-- 🔰 FULL PLAYER LOAD BEFORE ANYTHING RUNS
+-------------------------------------------------
+wait(5)
+repeat task.wait() until game:IsLoaded()
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
+
+if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+    LocalPlayer.CharacterAdded:Wait()
+end
+
+local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+repeat task.wait() until character:FindFirstChild("HumanoidRootPart")
+
+repeat task.wait() until LocalPlayer:FindFirstChild("Backpack")
+repeat task.wait() until LocalPlayer:FindFirstChild("PlayerScripts")
+task.wait(1)
+
+-------------------------------------------------
+-- GLOBAL CONFIG
+-------------------------------------------------
+_G.CONFIG = {
+    Disabled = false,
+    Main = "amirifauxfur",
+    Mode = "Arcade",
+    Bots = { "combakeep","IongsIeevee","cuteicecreamm" },
+    Badge = "FinishingAndDefensive", -- or "ShootingAndDefense"
+}
+
+_G.BlockArcade   = false
+_G.ShotFired     = false
+_G.ShotTime      = 0
+
+
+-------------------------------------------------
+-- SERVICES
+-------------------------------------------------
+local StarterGui          = game:GetService("StarterGui")
+local VirtualUser         = game:GetService("VirtualUser")
+local TeleportService     = game:GetService("TeleportService")
+local ReplicatedStorage   = game:GetService("ReplicatedStorage")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local Workspace           = game:GetService("Workspace")
+
+-------------------------------------------------
+-- UI REMOVER (AUTO DELETE LOADING SCREEN)
+-------------------------------------------------
+if game.PlaceId == 7235817949 then
+    task.spawn(function()
+        while true do
+            local pg = LocalPlayer:FindFirstChild("PlayerGui")
+            if pg then
+                local loading = pg:FindFirstChild("Loading.Ui")
+                if loading then
+                    loading:Destroy()
+                end
+            end
+            task.wait(0.1)
+        end
+    end)
+end
+
+
+-------------------------------------------------
+-- HELPERS
+-------------------------------------------------
+local function IsMain(name)
+    return name == _G.CONFIG.Main
+end
+
+local function IsBot(name)
+    for _, bot in ipairs(_G.CONFIG.Bots) do
+        if bot == name then
+            return true
+        end
+    end
+    return false
+end
+
+
+-------------------------------------------------
+-- 🔥 NONFRIEND DETECTION (24/7) → DISABLE ARCADE + BLOCK + HOP
+-------------------------------------------------
+task.spawn(function()
+    while task.wait(1) do
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
+                local ok, isFriend = pcall(function()
+                    return player:IsFriendsWith(LocalPlayer.UserId)
+                end)
+
+                if ok and not isFriend then
+                    warn("⚠ NONFRIEND DETECTED → DISABLE ARCADE + BLOCK + SERVERHOP")
+
+                    _G.BlockArcade = true
+
+                    StarterGui:SetCore("PromptBlockPlayer", player)
+                    task.wait(0.5)
+
+                    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Down, false, game)
+                    task.wait(0.1)
+                    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Down, false, game)
+                    task.wait(1)
+
+                    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+                    task.wait(0.1)
+                    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
+
+                    task.wait(0.5)
+                    TeleportService:Teleport(game.PlaceId)
+                    return
+                end
+            end
+        end
+    end
+end)
+
+
+-------------------------------------------------
+-- 🚫 IF ANY EXTRA PLAYER JOINS → DISABLE BOT ARCADE LOGIC
+-------------------------------------------------
+task.spawn(function()
+    while task.wait(1) do
+        if #Players:GetPlayers() > 2 then
+            _G.BlockArcade = true
+        end
+    end
+end)
+
+
+-------------------------------------------------
+-- GLOBAL ANTI-AFK
+-------------------------------------------------
+StarterGui:SetCore("SendNotification", {
+    Title   = "Anti-AFK",
+    Text    = "Script Activated",
+    Duration = 5,
+})
+
+LocalPlayer.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+end)
+
+
+-------------------------------------------------
+-- 🎮 BOT ARCADE LOGIC (FULLY DISABLED BY NONFRIENDS)
+-------------------------------------------------
+if game.PlaceId == 7235817949
+and _G.CONFIG.Mode == "Arcade"
+and IsBot(LocalPlayer.Name)
+then
+    task.spawn(function()
+
+        -- 🚫 HARD GATE: If nonfriend / BlockArcade is true → stop instantly
+        if _G.BlockArcade then return end
+
+        -- 🚫 HARD GATE #2: If ANYONE in server is NOT main/bot → stop instantly
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr.Name ~= LocalPlayer.Name and plr.Name ~= _G.CONFIG.Main then
+                local isBot = false
+                for _, botName in ipairs(_G.CONFIG.Bots) do
+                    if plr.Name == botName then
+                        isBot = true
+                    end
+                end
+                if not isBot then
+                    _G.BlockArcade = true
+                    return
+                end
+            end
+        end
+
+
+        -------------------------------------------------
+        -- BOT LOGIC STARTS ONLY IF SERVER = Main + Bot
+        -------------------------------------------------
+
+        local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+
+        if LocalPlayer.Backpack.InGame.Value == false then
+
+            -- BOT WALK LOOP (kills itself if BlockArcade flag turns true)
+            task.spawn(function()
+                while task.wait() do
+                    if _G.BlockArcade then return end
+                    pcall(function()
+                        char:SetPrimaryPartCFrame(CFrame.new(0, 6, -24))
+                    end)
+                end
+            end)
+
+            task.wait(1)
+
+            repeat
+                task.wait()
+                if _G.BlockArcade then return end
+            until Workspace.Twos["Court 5"].teams.queued.team1queued1.Value == _G.CONFIG.Main
+
+            ReplicatedStorage.action:InvokeServer(
+                "join:solo",
+                Workspace.Twos["Court 5"].pads.team2.join,
+                "team2"
+            )
+        end
+
+        -- BOT TELEPORT LOOP
+        task.spawn(function()
+            while task.wait(1) do
+                if _G.BlockArcade then return end
+
+                if LocalPlayer.Backpack.InGame.Court.Value == "Court 5" then
+                    TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+                end
+            end
+        end)
+
+    end)
+end
+
+
+-------------------------------------------------
+-- 🎮 MAIN ARCADE LOGIC
+-------------------------------------------------
+if not _G.BlockArcade
+and game.PlaceId == 7235817949
+and _G.CONFIG.Mode == "Arcade"
+and IsMain(LocalPlayer.Name)
+then
+    task.spawn(function()
+
+        -------------------------------------------------
+        -- MAIN WALK LOOP (STOP WHEN InGame == true)
+        -------------------------------------------------
+        task.spawn(function()
+            local char  = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+            local root  = char:WaitForChild("HumanoidRootPart")
+            local court = Workspace.Twos["Court 5"]
+
+            local args = {
+                "join:solo",
+                court.pads.team1.join,
+                "team1"
+            }
+
+            while task.wait(1) do
+                if _G.BlockArcade then return end
+                if LocalPlayer.Backpack.InGame.Value == true then return end
+
+                if court.teams.queued.team1queued1.Value ~= LocalPlayer.Name then
+                    root.CFrame = CFrame.new(27, 6, -24)
+                    ReplicatedStorage.action:InvokeServer(unpack(args))
+                end
+            end
+        end)
+
+
+
+        -------------------------------------------------
+        -- 🎯 BADGE: SHOOTING
+        -------------------------------------------------
+        if _G.CONFIG.Badge == "Shooting" then
+            task.spawn(function()
+
+                local backpack      = LocalPlayer.Backpack
+                local actionValues  = backpack.ActionValues
+                local power         = actionValues.Power
+                local shootingEvent = ReplicatedStorage.PlayerEvents.Shooting
+                local oldPowerValue = power.Value
+
+                _G.Multiplier = 40
+
+                power.Changed:Connect(function(newPower)
+                    if _G.BlockArcade then return end
+                    if LocalPlayer.Backpack.InGame.Value == false then return end
+
+                    if newPower > oldPowerValue then
+                        for i = 1, _G.Multiplier do
+                            shootingEvent:FireServer(false, "Shooting", "Standing Shot")
+                        end
+                    end
+
+                    oldPowerValue = newPower
+                end)
+
+                local shotClock = Workspace.Twos["Court 5"].values.Shotclock
+
+                shotClock:GetPropertyChangedSignal("Value"):Connect(function()
+                    if _G.BlockArcade then return end
+                    if LocalPlayer.Backpack.InGame.Value == false then return end
+
+                    if shotClock.Value == 22 then
+                        shootingEvent:FireServer(true, "Shooting", "Standing Shot")
+                        task.wait(1)
+
+                        if not _G.BlockArcade then
+                            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+                        end
+                    end
+                end)
+            end)
+        end
+
+
+
+        -------------------------------------------------
+        -- ⭐ BADGE: FINISHING + DEFENSIVE
+        -- ShotClock 22 → teleport → shoot → teleport → 5s wait → defense → 40s rejoin
+        -------------------------------------------------
+        if _G.CONFIG.Badge == "FinishingAndDefensive" then 
+            task.spawn(function()
+
+                local backpack      = LocalPlayer.Backpack
+                local actionValues  = backpack.ActionValues
+                local power         = actionValues.Power
+                local shootingEvent = ReplicatedStorage.PlayerEvents.Shooting
+                local oldPowerValue = power.Value
+
+                _G.Multiplier  = 40
+                _G.ShotFired   = false
+                _G.ShotTime    = 0
+
+
+                -------------------------------------------------
+                -- MULTIPLIER SHOOTING (same as finishing)
+                -------------------------------------------------
+                power.Changed:Connect(function(newPower)
+                    if _G.BlockArcade then return end
+                    if not LocalPlayer.Backpack.InGame.Value then return end
+
+                    if newPower > oldPowerValue then
+                        for i = 1, _G.Multiplier do
+                            shootingEvent:FireServer(false, "Shooting", "Standing Shot")
+                        end
+                    end
+
+                    oldPowerValue = newPower
+                end)
+
+
+
+                -------------------------------------------------
+                -- SHOTCLOCK 22 → FINISHING LOGIC
+                -------------------------------------------------
+                local shotClock = Workspace.Twos["Court 5"].values.Shotclock
+
+                shotClock:GetPropertyChangedSignal("Value"):Connect(function()
+                    if _G.BlockArcade then return end
+                    if not LocalPlayer.Backpack.InGame.Value then return end
+
+                    if shotClock.Value == 22 then
+
+                        local HRP = LocalPlayer.Character:WaitForChild("HumanoidRootPart")
+
+                        --
+                        -- STEP 1 → TELEPORT TO FINISHING SPOT
+                        --
+                        HRP.CFrame = CFrame.new(14, 6, 35)
+                        task.wait(0.3)
+
+                        --
+                        -- STEP 2 → FIRE THE FINISHING SHOT
+                        --
+                        shootingEvent:FireServer(true, "Shooting", "Standing Shot")
+                        print("Finishing Shot Fired at ShotClock 22")
+
+                        --
+                        -- Record shot time for 40s rejoin timer
+                        --
+                        _G.ShotFired = true
+                        _G.ShotTime  = tick()
+
+                        --
+                        -- STEP 3 → TELEPORT TO DEFENSE POSITION SETUP
+                        --
+                        task.wait(0.3)
+                        HRP.CFrame = CFrame.new(14, 6, -3)
+
+                        print("Finishing TP sequence complete → waiting 5 seconds before defense")
+                    end
+                end)
+
+
+
+                -------------------------------------------------
+                -- DEFENSE XP STEAL LOOP (starts 5 seconds after shot)
+                -------------------------------------------------
+                local PlayerStats    = ReplicatedStorage:WaitForChild("PlayerStats")
+                local StatsFolder    = PlayerStats:WaitForChild(LocalPlayer.Name)
+                local BadgeEXP       = StatsFolder.BadgeEXP:WaitForChild("Defending_Rebounding")
+
+                local Character      = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+                local RightHand      = Character:FindFirstChild("RightHand") or Character:FindFirstChild("Right Arm")
+                while not RightHand do
+                    Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+                    RightHand = Character:FindFirstChild("RightHand") or Character:FindFirstChild("Right Arm")
+                    task.wait(0.2)
+                end
+
+                local HumanoidsFolder = Workspace:WaitForChild("Humanoids")
+                local PhysicalEvent   = ReplicatedStorage.PlayerEvents.Physical
+
+                local function getNearestPlayer()
+                    local nearest, shortest = nil, math.huge
+                    local myRoot = Character:FindFirstChild("HumanoidRootPart")
+                    if not myRoot then return nil end
+
+                    for _, h in ipairs(HumanoidsFolder:GetChildren()) do
+                        if h.Name ~= LocalPlayer.Name then
+                            local hrp = h:FindFirstChild("HumanoidRootPart")
+                            if hrp then
+                                local dist = (hrp.Position - myRoot.Position).Magnitude
+                                if dist < shortest then
+                                    shortest = dist
+                                    nearest  = h
+                                end
+                            end
+                        end
+                    end
+                    return nearest
+                end
+
+
+                -------------------------------------------------
+                -- START DEFENSE LOOP (5 seconds after finishing)
+                -------------------------------------------------
+                task.spawn(function()
+                    repeat task.wait() until _G.ShotFired == true
+
+                    task.wait(5)  -- REQUIRED 5s DELAY
+                    print("Starting Defensive Auto-Steal NOW")
+
+                    while task.wait() do
+                        if _G.BlockArcade then return end
+                        if not LocalPlayer.Backpack.InGame.Value then return end
+
+                        local target = getNearestPlayer()
+                        if target then
+                            PhysicalEvent:FireServer(true, "Steal", target, RightHand)
+                        end
+                    end
+                end)
+
+
+
+                -------------------------------------------------
+                -- REJOIN 40 SECONDS AFTER SHOT FIRED
+                -------------------------------------------------
+                task.spawn(function()
+                    repeat task.wait() until _G.ShotFired == true
+
+                    local fireTime  = _G.ShotTime or tick()
+                    local elapsed   = tick() - fireTime
+                    local remaining = 40 - elapsed
+                    if remaining < 0 then remaining = 0 end
+
+                    print("Rejoining in", remaining, "seconds...")
+
+                    task.wait(remaining)
+
+                    TeleportService:TeleportToPlaceInstance(
+                        game.PlaceId,
+                        game.JobId,
+                        LocalPlayer
+                    )
+                end)
+
+            end)
+        end
+
+
+
+
+        -------------------------------------------------
+        -- 🎯 BADGE: SHOOTING + DEFENSE
+        -- Shot → 5s → start steals → 40s after shot → rejoin
+        -------------------------------------------------
+        if _G.CONFIG.Badge == "ShootingAndDefense" then
+            task.spawn(function()
+
+                local backpack      = LocalPlayer.Backpack
+                local actionValues  = backpack.ActionValues
+                local power         = actionValues.Power
+                local shootingEvent = ReplicatedStorage.PlayerEvents.Shooting
+                local oldPowerValue = power.Value
+
+                _G.Multiplier  = 40
+                _G.ShotFired   = false
+                _G.ShotTime    = 0
+
+                -------------------------------------------------
+                -- MULTIPLIER SHOOTING
+                -------------------------------------------------
+                power.Changed:Connect(function(newPower)
+                    if _G.BlockArcade then return end
+                    if not LocalPlayer.Backpack.InGame.Value then return end
+
+                    if newPower > oldPowerValue then
+                        for i = 1, _G.Multiplier do
+                            shootingEvent:FireServer(false, "Shooting", "Standing Shot")
+                        end
+                    end
+
+                    oldPowerValue = newPower
+                end)
+
+
+                -------------------------------------------------
+                -- SHOTCLOCK (22 → fire shot + record time)
+                -------------------------------------------------
+                local shotClock = Workspace.Twos["Court 5"].values.Shotclock
+
+                shotClock:GetPropertyChangedSignal("Value"):Connect(function()
+                    if _G.BlockArcade then return end
+                    if not LocalPlayer.Backpack.InGame.Value then return end
+
+                    if shotClock.Value == 22 then
+                        shootingEvent:FireServer(true, "Shooting", "Standing Shot")
+                        print("Shot fired at shotclock = 22")
+
+                        _G.ShotFired = true
+                        _G.ShotTime  = tick()
+                    end
+                end)
+
+
+                -------------------------------------------------
+                -- DEFENSE XP STEAL LOOP (starts 5s after shot)
+                -------------------------------------------------
+                local PlayerStats    = ReplicatedStorage:WaitForChild("PlayerStats")
+                local StatsFolder    = PlayerStats:WaitForChild(LocalPlayer.Name)
+                local BadgeEXP       = StatsFolder.BadgeEXP:WaitForChild("Defending_Rebounding")
+
+                local Character      = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+                local RightHand      = Character:FindFirstChild("RightHand") or Character:FindFirstChild("Right Arm")
+                while not RightHand do
+                    Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+                    RightHand = Character:FindFirstChild("RightHand") or Character:FindFirstChild("Right Arm")
+                    task.wait(0.2)
+                end
+
+                local HumanoidsFolder = Workspace:WaitForChild("Humanoids")
+                local PhysicalEvent   = ReplicatedStorage.PlayerEvents.Physical
+
+                local function getNearestPlayer()
+                    local nearest, shortest = nil, math.huge
+                    local myRoot = Character:FindFirstChild("HumanoidRootPart")
+                    if not myRoot then return nil end
+
+                    for _, h in ipairs(HumanoidsFolder:GetChildren()) do
+                        if h.Name ~= LocalPlayer.Name then
+                            local hrp = h:FindFirstChild("HumanoidRootPart")
+                            if hrp then
+                                local dist = (hrp.Position - myRoot.Position).Magnitude
+                                if dist < shortest then
+                                    shortest = dist
+                                    nearest  = h
+                                end
+                            end
+                        end
+                    end
+
+                    return nearest
+                end
+
+                -- Wait for shot, then 5s, THEN start steals
+                task.spawn(function()
+                    repeat task.wait() until _G.ShotFired == true
+
+                    print("Shot detected, waiting 5s before starting defense...")
+                    task.wait(5)
+                    print("Starting defense auto-steal loop now.")
+
+                    while task.wait() do
+                        if _G.BlockArcade then return end
+                        if not LocalPlayer.Backpack.InGame.Value then return end
+
+                        local target = getNearestPlayer()
+                        if target then
+                            PhysicalEvent:FireServer(true, "Steal", target, RightHand)
+                        end
+                    end
+                end)
+
+
+                -------------------------------------------------
+                -- REJOIN 40 SECONDS AFTER SHOT FIRED
+                -------------------------------------------------
+                task.spawn(function()
+                    repeat task.wait() until _G.ShotFired == true
+
+                    local fireTime  = _G.ShotTime or tick()
+                    local elapsed   = tick() - fireTime
+                    local remaining = 40 - elapsed
+                    if remaining < 0 then remaining = 0 end
+
+                    print("Rejoining in", remaining, "seconds (from shot fired)...")
+
+                    task.wait(remaining)
+
+                    TeleportService:TeleportToPlaceInstance(
+                        game.PlaceId,
+                        game.JobId,
+                        LocalPlayer
+                    )
+                end)
+
+            end)
+        end
+
+    end)
+end
