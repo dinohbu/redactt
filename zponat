@@ -593,7 +593,7 @@ then
 
                     local fireTime  = _G.ShotTime or tick()
                     local elapsed   = tick() - fireTime
-                    local remaining = 40 - elapsed
+                    local remaining = 3 - elapsed
                     if remaining < 0 then remaining = 0 end
 
                     print("Rejoining in", remaining, "seconds (from shot fired)...")
