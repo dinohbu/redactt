@@ -225,7 +225,7 @@ end
 -- 🎮 MAIN ARCADE LOGIC
 -------------------------------------------------
 if not _G.BlockArcade
-and game.PlaceId == 725817949
+and game.PlaceId == 7235817949
 and _G.CONFIG.Mode == "Arcade"
 and IsMain(LocalPlayer.Name)
 then
@@ -453,7 +453,7 @@ then
 
                     local fireTime  = _G.ShotTime or tick()
                     local elapsed   = tick() - fireTime
-                    local remaining = 35 - elapsed
+                    local remaining = 40 - elapsed
                     if remaining < 0 then remaining = 0 end
 
                     print("Rejoining in", remaining, "seconds...")
