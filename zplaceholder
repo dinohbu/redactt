@@ -23,9 +23,9 @@ task.wait(1)
 -------------------------------------------------
 _G.CONFIG = {
     Disabled = false,
-    Main = "joeyIover",
+    Main = "onnatredact",
     Mode = "Arcade",
-    Bots = { "combakeep","osamasongamers","cuteicecreamm" },
+    Bots = { "combakeep","LightsFinalTolI","cuteicecreamm" },
     Badge = "FinishingAndDefensive", -- or "ShootingAndDefense"
 }
 
@@ -453,7 +453,7 @@ then
 
                     local fireTime  = _G.ShotTime or tick()
                     local elapsed   = tick() - fireTime
-                    local remaining = 2 - elapsed
+                    local remaining = 3 - elapsed
                     if remaining < 0 then remaining = 0 end
 
                     print("Rejoining in", remaining, "seconds...")
