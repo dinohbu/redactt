@@ -23,7 +23,7 @@ task.wait(1)
 -------------------------------------------------
 _G.CONFIG = {
     Disabled = false,
-    Main = "amirifauxfur",
+    Main = "snowpIane",
     Mode = "Arcade",
     Bots = { "combakeep","IongsIeevee","cuteicecreamm" },
     Badge = "Shooting", -- or "ShootingAndDefense"
