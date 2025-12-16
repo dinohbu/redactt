@@ -26,7 +26,7 @@ _G.CONFIG = {
     Main = "joeyIover",
     Mode = "Arcade",
     Bots = { "combakeep","osamasongamers","cuteicecreamm" },
-    Badge = "FinishingAndDefensive", -- or "ShootingAndDefense" "FinishingAndDefensive"
+    Badge = "Shooting", -- or "ShootingAndDefense" "FinishingAndDefensive"
 }
 
 _G.BlockArcade   = false
