@@ -1,0 +1,1791 @@
+--======================================================
+-- HARD RESET (REINJECTION SAFE)
+--======================================================
+local genv = getgenv()
+
+rawset(genv, "CURRENT_LOCKED_PLAYER", nil)
+
+for _, key in ipairs({
+    "LOCK_ANIMCONN_F",
+    "LOCK_ANIMCONN_SELF",
+    "LOCK_KEY_CONN"
+}) do
+    if genv[key] then
+        pcall(function() genv[key]:Disconnect() end)
+    end
+    genv[key] = nil
+end
+
+if genv.LOCK_BILLBOARD then pcall(function() genv.LOCK_BILLBOARD:Destroy() end) end
+if genv.LOCK_DELAY_LABEL then pcall(function() genv.LOCK_DELAY_LABEL:Destroy() end) end
+if genv.LOCK_NAME_LABEL then pcall(function() genv.LOCK_NAME_LABEL:Destroy() end) end
+if genv.LOCK_ID_LABEL then pcall(function() genv.LOCK_ID_LABEL:Destroy() end) end
+
+genv.LOCK_BILLBOARD = nil
+genv.LOCK_DELAY_LABEL = nil
+genv.LOCK_NAME_LABEL = nil
+genv.LOCK_ID_LABEL = nil
+
+--======================================================
+-- WEBHOOK MODE (TRUE = HIDE ALL UI + SEND TO WEBHOOK)
+--======================================================
+getgenv().WEBHOOK_MODE = false -- redact
+local WEBHOOK_URL = "https://canary.discord.com/api/webhooks/1477587136697077845/HqxwPB3LnyXUgmc6rVXQt2hP6NYLQHieB_bFpW2bxrbNgnQw9C0dyaiQqIKIHFz_qOhY"
+
+local HttpService = game:GetService("HttpService")
+
+local function sendWebhook(title, text)
+    -- UNTRACKED logs call sendWebhook only when WEBHOOK_MODE = false  
+    -- but tracked logs + lock events should ALWAYS send  
+
+    pcall(function()
+        local data = {
+            username = "Lock-On Logger",
+            embeds = {{
+                title = title,
+                description = text,
+                color = 16711680
+            }}
+        }
+
+        request({
+            Url = WEBHOOK_URL,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode(data)
+        })
+    end)
+end
+
+--======================================================
+-- GLOBAL MOVEMENT LOCK (ACTUALLY WORKS)
+--======================================================
+getgenv().MOVEMENT_LOCK = false          -- when true, block your REAL keys
+getgenv().MACRO_INPUT_ACTIVE = false     -- when true, let macro keys through
+
+local blockedKeys = {
+    [Enum.KeyCode.W] = true,
+    [Enum.KeyCode.A] = true,
+    [Enum.KeyCode.S] = true,
+    [Enum.KeyCode.D] = true,
+    [Enum.KeyCode.LeftShift] = true,
+    [Enum.KeyCode.RightShift] = true,
+    [Enum.KeyCode.Space] = true,
+    [Enum.KeyCode.Q] = true,
+}
+
+local UIS = game:GetService("UserInputService")
+local CAS = game:GetService("ContextActionService")
+
+local function movementBlock()
+    return Enum.ContextActionResult.Pass
+end
+
+-- reinjection-safe bind
+CAS:UnbindAction("GlobalMovementLock")
+-- CAS:BindAction(
+--     "GlobalMovementLock",
+--     movementBlock,
+--     false,
+--     Enum.KeyCode.W,
+--     Enum.KeyCode.A,
+--     Enum.KeyCode.S,
+--     Enum.KeyCode.D,
+--     Enum.KeyCode.LeftShift,
+--     Enum.KeyCode.RightShift,
+--     Enum.KeyCode.Space,
+--     Enum.KeyCode.Q,
+--     Enum.UserInputType.MouseButton1
+-- )
+
+--======================================================
+-- SERVICES
+--======================================================
+local Players = game:GetService("Players")
+local StarterGui = game:GetService("StarterGui")
+local VirtualInput = game:GetService("VirtualInputManager")
+local Stats = game:GetService("Stats")
+local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
+
+-- Scan the entire ReplicatedStorage so IDs can be resolved across games
+local AnimFolder = game:GetService("ReplicatedStorage")
+
+--======================================================
+-- SETTINGS
+--======================================================
+local LOCK_KEY = Enum.KeyCode.T
+local LOCK_RANGE = 250
+local F_RANGE = 35 -- max distance to press F
+
+local F_DEFAULT_DELAY = 0.09
+local F_BEFORE_DEFAULT = 0.65
+-- RF (Right + F) system defaults
+local RF_DEFAULT_DELAY = 0.05
+local RF_BEFORE_DEFAULT = 0.75
+-- how long to hold E so it is held leading up to the before moment
+
+-- Grace-distance system: if target is beyond max range but within grace range, apply delay penalty
+local GRACE_DISTANCE = 0 -- studs beyond max distance to still allow attacks
+local EXTENDED_RANGE_DELAY_PENALTY = 0 -- seconds to add to delay for grace-distance hits
+
+
+
+
+--======================================================
+-- PING COMPENSATION
+--======================================================
+local CurrentPing = 0
+task.spawn(function()
+	while true do
+		local data = Stats.Network.ServerStatsItem["Data Ping"]
+		if data then CurrentPing = data:GetValue() or 0 end
+		task.wait(0.25)
+	end
+end)
+
+--======================================================
+-- PING COMPENSATION REMOVED
+--======================================================
+-- All delays now use raw values, no ping adjustment
+local function adjustDelay(base, isBeforeFlag)
+    return base
+end
+
+--======================================================
+-- ANIMATION NAME CACHE
+--======================================================
+local ANIM_CACHE = {}
+for _, obj in ipairs(AnimFolder:GetDescendants()) do
+	if obj:IsA("Animation") then
+		local id = tostring(obj.AnimationId or ""):match("%d+")
+		if id then ANIM_CACHE[id] = obj.Name end
+	end
+end
+
+local function getAnimName(id)
+    -- Prefer cached name
+    local cached = ANIM_CACHE[id]
+    if cached and cached ~= "" then return cached end
+
+    -- Search players for Animation instances (e.g., tools or backpack scripts)
+    for _, pl in ipairs(Players:GetPlayers()) do
+        for _, desc in ipairs(pl:GetDescendants()) do
+            if desc:IsA("Animation") then
+                local aid = tostring(desc.AnimationId or ""):match("%d+")
+                if aid == tostring(id) then
+                    if desc.Parent then return desc.Parent.Name end
+                end
+            end
+        end
+    end
+
+    return ANIM_CACHE[id] or "Unknown"
+end
+
+
+--======================================================
+-- UNTRACKED ANIMATION LOGGING SYSTEM BOOFY GOOFY BOY
+--======================================================
+local EXCLUDED_UNTRACKED = {
+    ["180426354"] = true,   -- RobloxWalk
+    ["10546059749"] = true, -- RunLoop_Default
+    ["10546151222"] = true, -- RunLoop_DualSword
+    ["10546190283"] = true, -- RunLoop_Halberd
+    ["12357922879"] = true, -- SprintStart
+        ["14597046093"] = true,   -- RobloxWalk
+    ["106688736282435"] = true, -- RunLoop_Default
+    ["18971458640"] = true, -- RunLoop_DualSword
+    ["11497901053"] = true, -- RunLoop_Halberd
+    ["9461063984"] = true, -- SprintStart
+            ["11497886799"] = true,   -- RobloxWalk
+    ["9461059177"] = true, -- RunLoop_Default
+    ["11273001982"] = true, -- RunLoop_DualSword
+    ["101162579246421"] = true, -- RunLoop_Halberd
+    ["127153082609965"] = true, -- SprintStart
+    ["6940137765"] = true, -- RunLoop_Default
+    ["17096542398"] = true, -- RunLoop_DualSword
+    ["6954017051"] = true, -- RunLoop_Halberd
+    ["70967133952711"] = true, -- SprintStart
+
+    ["13381679637"] = true,
+    ["180435792"] = true,
+    ["180435571"] = true,
+    ["13200850676"] = true,
+    ["13200841099"] = true,
+    ["13200873777"] = true,
+    ["13200810179"] = true,
+    ["14158186720"] = true,
+    ["13314107510"] = true,
+    ["13191280192"] = true,
+    ["13574723894"] = true,
+    ["13237374062"] = true,
+    ["13776599207"] = true,
+    ["13191761678"] = true,
+    ["13776599207"] = true,
+    ["77622224732046"] = true,
+    ["180436334"] = true,
+    ["13574723894"] = true,
+
+}
+
+local REPORTED_UNTRACKED = {} -- prevents duplicate spam
+
+-- (We still keep REPORTED_UNTRACKED declared for compatibility, but it's no longer used to block UI updates)
+
+-- logUntrackedAnimation now accepts optional model to update UI for locked target
+local function logUntrackedAnimation(id, model)
+
+    -- ❗ Only send to webhook when WEBHOOK_MODE = false
+    if getgenv().WEBHOOK_MODE then return end
+
+    -- Only report once per animation id to avoid spam
+    if REPORTED_UNTRACKED[id] then return end
+
+    if EXCLUDED_UNTRACKED[id] then return end
+
+    local animName = getAnimName(id)
+
+    -- If animName is Unknown, try to find a player-side Animation instance and use its parent name
+    if animName == "Unknown" then
+        -- search players and their descendants for an Animation with this id
+        for _, pl in ipairs(Players:GetPlayers()) do
+            for _, desc in ipairs(pl:GetDescendants()) do
+                if desc:IsA("Animation") then
+                    local aid = tostring(desc.AnimationId or ""):match("%d+")
+                    if aid == tostring(id) then
+                        if desc.Parent then
+                            animName = desc.Parent.Name
+                            break
+                        end
+                    end
+                end
+            end
+            if animName ~= "Unknown" then break end
+        end
+    end
+
+    sendWebhook(
+        "UNTRACKED ANIMATION DETECTED",
+        "**Name:** " .. animName .. "\n" ..
+        "**ID:** `" .. id .. "`"
+    )
+
+    -- mark reported to prevent duplicates (also prevents repeated UI updates)
+    REPORTED_UNTRACKED[id] = true
+
+    -- If this untracked animation belongs to the currently locked player, update the billboard blue label
+    if model and genv.CURRENT_LOCKED_PLAYER and model == genv.CURRENT_LOCKED_PLAYER then
+        if genv.LOCK_UNTRACKED_LABEL then
+            genv.LOCK_UNTRACKED_LABEL.Text = animName .. " (ID: " .. id .. ")"
+            genv.LOCK_UNTRACKED_LABEL.TextColor3 = Color3.fromRGB(100, 170, 255)
+        end
+    end
+end
+
+--======================================================
+-- TRACKED LISTS (YOU PASTE IDS HERE)
+--======================================================
+local TRACKED_IDS_F = {
+    
+
+
+}
+
+-- RF category: animations that should trigger a Right+F action
+local TRACKED_IDS_RF = {
+    -- add IDs here, example:
+    -- "12345678901234",
+}
+
+local TRACKED_IDS_RF_BEFORE_END = {
+    "110478475041750", -- Pistol / Shuriken / Glaive / DualSickles / Bow / Vajra
+    "120226911812284", -- Lantern
+    "114045266832365", -- Scythe
+    "129181843143224", -- Chainsaw
+    "79190651803938", -- Glaive / Gun
+    "123917579888288", -- Shuriken
+    "84762847716448", -- Vajra
+    "18657046837", -- Yoyo
+    "102655558672084", -- Pistol
+    "134977336114745", -- Bow
+    "111913090576921", -- DualSickles
+    "78008330402515", -- Lantern
+    "129618005224278", -- Khakkhara / Furnace / Chakrams / ResShuriken
+    "88414662529992", -- Spear
+    "120498298197036", -- DeathCannon
+    "82965522748627", -- Fan
+
+    "128191282943244", -- shift
+    "99898658602737", -- shift
+}
+
+-- NEW: animations for which we want to press F some amount of time BEFORE the animation ends
+local TRACKED_IDS_F_BEFORE_END = {
+
+    "135237575623161",
+    "86277254621912",
+    "97412519242220",
+    "95212348690056",
+    "139508129291920",
+    "98966200959617",
+    "94378343844423",
+    "79093778544895",
+
+    "109176858751664",
+    "98605920382838",
+    "82184093854813",
+    "124689329730919",
+    "86076390642653",
+
+
+
+
+
+    -- LightAttacks
+    "91440727333008", -- ClientPartialOdachi
+    "97132775902163",
+    "135965654289426",
+    "112571153062065",
+    "120707566821838", -- ClientPartialShuriken
+    "78033819494858",
+    "140676449414912",
+    "110443110984870",
+    "122588953153331", -- ClientPartialGlaive
+    "96876364727578",
+    "112713273290013",
+    "120356873550880",
+    "109046196616583", -- ClientPartialDualSickles
+    "99671440217994",
+    "117056254898527",
+    "83926072519416",
+    "100340119591423", -- ClientPartialBow
+    "15020331138", -- ClientPartialLantern
+    "97650353173967",
+    "108215795879947",
+    "106779703045692",
+    "127900505653302", -- ClientPartialPistol
+    "135002854074155",
+    "102368590919131", -- ClientPartialScythe
+    "123523460902012",
+    "121643179330060",
+    "106863915470276",
+    "98589724026580", -- ClientPartialChainsaw
+    "72957032443548",
+    "71143980609439",
+    "86360248354358",
+    "137192417828411", -- ClientScythe
+    "82178492914389",
+    "110104059913883",
+    "125046985648394",
+    -- Static Attacks
+    "85600126814878", -- ClientGlaive
+    "103069496577497",
+    "100661608460357",
+    "112698938329906",
+    "18688684452", -- ClientShuriken
+    "18688695013",
+    "18688696874",
+    "18688701221",
+    "88425003522416", -- ClientGun
+    "132846161218593",
+    "88021059553668",
+    "107578843323292",
+    "83597128763314", -- ClientOdachi
+    "137047162394430",
+    "94363243870652",
+    "96553492138332",
+    "100320805290287", -- ClientVajra
+    "125839196983522",
+    "82077868030086",
+    "77135673684232",
+    "18656512288", -- ClientYoyo
+    "18656720274",
+    "18656912976",
+    "18656957377",
+    "130380243017660", -- ClientPistol
+    "83580858918756",
+    "102445305459214",
+    "137785367718179",
+    "113228948659640", -- ClientBow
+    "119175814215285",
+    "83189271119324",
+    "86398337512941",
+    "118619999081644", -- ClientDualSickles
+    "112850440007338",
+    "127050422827369",
+    "78073358490403",
+    "84000066130572", -- ClientLantern
+    "135748620470989",
+    "120037158730710",
+    "117708351960670",
+    "73932825743984", -- ClientKhakkhara
+    "75269638226144",
+    "116360997934606",
+    "85272236340876", -- ClientFurnace (removed dups from Khakkhara)
+    "99447020480937", -- ClientChakrams (removed dups from Others)
+    "84253723775152",
+    "98965913505650", -- ClientSpear
+    "127127574087358",
+    "118542350990952",
+    "89810500644577",
+    "18746249868", -- ClientDeathCannon
+    "18746251965",
+    "18746253015",
+    "18746254241",
+    "107384648864181", -- ClientFan
+    "101722412373734",
+    "76154209126659",
+    "77267864075274",
+
+    "89981548095298",
+
+    "102802319491502", -- chase
+
+    -- RunningAttacks
+    "91603110047132", -- ClientPartialOdachi
+    "83615131377857",
+    "82648171349389", -- ClientPartialShuriken
+    "124020021208622",
+    "135058138903028", -- ClientPartialGlaive
+    "97207266978094",
+    "140664404868723", -- ClientPartialDualSickles
+    "119656879659915",
+    "112197821173920", -- ClientPartialBow
+    "87031697771282",
+    "15679138353", -- ClientPartialLantern
+    "17580900409",
+    "94353897236211", -- ClientPartialPistol
+    "130537711811737", -- ClientPartialChainsaw
+    "74660137362622",
+    "17599153919", -- ClientScythe
+    "86373126011935", -- ClientGlaive
+    "118571569345862",
+    "83348124067271", -- ClientShuriken
+    "18688765638",
+    "97006683522678", -- ClientGun
+    "71617562443363",
+    "114867367806095", -- ClientOdachi
+    "92011179781662",
+    "129446276561786", -- ClientVajra
+    "81001106572124",
+    "18657022631", -- ClientYoyo
+    "18673008011",
+    "79931669397382", -- ClientPistol
+    "72568027883912", -- ClientBow
+    "130386533050382",
+    "110493741308480", -- ClientLantern
+    "139983563914346",
+    "102256748666332", -- ClientKhakkhara
+    "115447323822288",
+    "101083417937115", -- ClientFan
+    "137727106597947",
+    "88535920899687", -- ClientChainsaw
+    "102534651322618",
+
+}
+
+local CUSTOM_DELAY_IDS = {
+    { "13201752394", 0.45 },
+
+
+
+}
+
+--======================================================
+-- LOOKUP TABLES
+--======================================================
+local LOOKUP_F, CUSTOM_DELAY_MAP = {}, {}
+for _, id in ipairs(TRACKED_IDS_F) do LOOKUP_F[tostring(id)] = true end
+local LOOKUP_F_BEFORE = {}
+for _, id in ipairs(TRACKED_IDS_F_BEFORE_END) do LOOKUP_F_BEFORE[tostring(id)] = true end
+
+-- RF lookup tables
+local LOOKUP_RF, CUSTOM_DELAY_RF_MAP = {}, {}
+for _, id in ipairs(TRACKED_IDS_RF) do LOOKUP_RF[tostring(id)] = true end
+local LOOKUP_RF_BEFORE = {}
+for _, id in ipairs(TRACKED_IDS_RF_BEFORE_END) do LOOKUP_RF_BEFORE[tostring(id)] = true end
+
+for _, v in ipairs(CUSTOM_DELAY_IDS) do
+    local id = tostring(v[1])
+    local delays = v[2]
+
+    if type(delays) == "table" then
+        CUSTOM_DELAY_MAP[id] = delays
+    else
+        CUSTOM_DELAY_MAP[id] = { delays }
+    end
+end
+
+--======================================================
+-- CUSTOM "BEFORE-END" DELAYS (optional)
+-- Delays here are seconds BEFORE the animation end when F should be pressed
+-- Example: { "15010461309", 0.20 } will press F 0.20s before the anim ends
+--======================================================
+local CUSTOM_BEFORE_IDS = {
+        { "13201752394", 0.45 },
+        { "102802319491502", 0.45 }, -- chase
+
+        { "135237575623161", 0.89 },
+        { "86277254621912", 0.7 },
+        { "95212348690056", 0.65 },
+        { "79093778544895", 0.5 },
+        { "94378343844423", 0.4 },
+        { "139508129291920", 0.95 },
+        { "98966200959617", 1.2 },
+
+        { "97412519242220", 0.60 },
+
+        { "109176858751664", 1.05 },
+        { "98605920382838", 0.86 },
+        { "82184093854813", 0.96 },
+        { "124689329730919", 0.9 },
+        { "86076390642653", 0.505 },
+
+        { "89981548095298", 0.65 },
+
+
+        -- ClientPartialOdachi
+{ "91603110047132", 0.531 }, -- RunningAttack
+{ "83615131377857", 0.6 }, -- ResonateRunningAttack
+
+-- ClientPartialShuriken
+{ "82648171349389", 0.531 }, -- RunningAttack
+{ "124020021208622", 0.6 }, -- ResonateRunningAttack
+
+-- ClientPartialGlaive
+{ "135058138903028", 0.531 }, -- RunningAttack
+{ "97207266978094", 0.6 }, -- ResonateRunningAttack
+
+-- ClientPartialDualSickles
+{ "140664404868723", 0.531 }, -- RunningAttack
+{ "119656879659915", 0.6 }, -- ResonateRunningAttack
+
+-- ClientPartialBow
+{ "112197821173920", 0.531 }, -- RunningAttack
+{ "87031697771282", 0.6 }, -- ResonateRunningAttack
+
+-- ClientPartialLantern
+{ "15679138353", 0.531 }, -- RunningAttack
+{ "17580900409", 0.6 }, -- ResonateRunningAttack
+
+-- ClientPartialPistol
+{ "94353897236211", 0.5 }, -- RunningAttack
+
+-- ClientPartialChainsaw
+{ "130537711811737", 0.531 }, -- RunningAttack
+{ "74660137362622", 0.6 }, -- ResonateRunningAttack
+
+-- ClientScythe
+{ "17599153919", 0.531 }, -- RunningAttack
+
+-- ClientGlaive
+{ "86373126011935", 0.531 }, -- RunningAttack
+{ "118571569345862", 0.6 }, -- ResonateRunningAttack
+
+-- ClientShuriken
+{ "83348124067271", 0.531 }, -- RunningAttack
+{ "18688765638", 0.6 }, -- ResonateRunningAttack
+
+-- ClientGun
+{ "97006683522678", 0.531 }, -- RunningAttack
+{ "71617562443363", 0.6 }, -- ResonateRunningAttack
+
+-- ClientOdachi
+{ "114867367806095", 0.531 }, -- RunningAttack
+{ "92011179781662", 0.6 }, -- ResonateRunningAttack
+
+-- ClientVajra
+{ "129446276561786", 0.531 }, -- RunningAttack
+{ "81001106572124", 0.6 }, -- ResonateRunningAttack
+
+-- ClientYoyo
+{ "18657022631", 0.531 }, -- RunningAttack
+{ "18673008011", 0.6 }, -- ResonateRunningAttack
+
+-- ClientPistol
+{ "79931669397382", 0.6 }, -- ResonateRunningAttack
+
+-- ClientBow
+{ "72568027883912", 0.531 }, -- RunningAttack
+{ "130386533050382", 0.6 }, -- ResonateRunningAttack
+
+-- ClientLantern
+{ "110493741308480", 0.531 }, -- RunningAttack
+{ "139983563914346", 0.6 }, -- ResonateRunningAttack
+
+-- Shared (Khakkhara / Furnace / Chakrams / ResShuriken)
+{ "102256748666332", 0.531 }, -- RunningAttack
+{ "115447323822288", 0.6 }, -- ResonateRunningAttack
+
+-- ClientFan
+{ "101083417937115", 0.531 }, -- RunningAttack
+{ "137727106597947", 0.6 }, -- ResonateRunningAttack
+
+-- ClientChainsaw
+{ "88535920899687", 0.531 }, -- RunningAttack
+{ "102534651322618", 0.6 }, -- ResonateRunningAttack
+
+}
+
+local CUSTOM_BEFORE_MAP = {}
+
+for _, v in ipairs(CUSTOM_BEFORE_IDS) do
+    local id = tostring(v[1])
+    local delays = v[2]
+
+    if type(delays) == "table" then
+        CUSTOM_BEFORE_MAP[id] = delays
+    else
+        CUSTOM_BEFORE_MAP[id] = { delays }
+    end
+end
+
+-- RF-specific custom delay lists (per-move overrides)
+local CUSTOM_DELAY_IDS_RF = {
+    -- { "12345678901234", 0.02 },
+}
+
+for _, v in ipairs(CUSTOM_DELAY_IDS_RF) do
+    local id = tostring(v[1])
+    local delays = v[2]
+    if type(delays) == "table" then
+        CUSTOM_DELAY_RF_MAP[id] = delays
+    else
+        CUSTOM_DELAY_RF_MAP[id] = { delays }
+    end
+end
+
+local CUSTOM_BEFORE_IDS_RF = {
+    -- { "12345678901234", 0.20 },
+        { "128191282943244", 0.55 }, -- shift
+       { "99898658602737", 0.55 }, -- shift
+}
+
+local CUSTOM_BEFORE_RF_MAP = {}
+for _, v in ipairs(CUSTOM_BEFORE_IDS_RF) do
+    local id = tostring(v[1])
+    local delays = v[2]
+    if type(delays) == "table" then
+        CUSTOM_BEFORE_RF_MAP[id] = delays
+    else
+        CUSTOM_BEFORE_RF_MAP[id] = { delays }
+    end
+end
+
+local function getDelayRF(id, def)
+    return CUSTOM_DELAY_RF_MAP[id] or def
+end
+
+local function getBeforeDelayRF(id, def)
+    return CUSTOM_BEFORE_RF_MAP[id] or def
+end
+
+local function getDelay(id, def)
+	return CUSTOM_DELAY_MAP[id] or def
+end
+
+-- For the before-end category: delays represent seconds BEFORE the animation end
+local function getBeforeDelay(id, def)
+    return CUSTOM_BEFORE_MAP[id] or def
+end
+
+
+
+
+-- Example: { "1234567890", 12 } -- sets move 1234567890 to 12 studs 99u
+--======================================================
+local CUSTOM_DISTANCE_IDS = {
+    -- { "100918285736290", 10 }, -- example: KingCrocAxeKick
+    { "113857139743696", 60 }, -- WendigoBarrage
+    { "119326248436422", 60 }, -- WendigoProjectile
+
+    { "91440727333008", 11 },
+    { "97132775902163", 11 },
+    { "135965654289426", 11 },
+    { "112571153062065", 11 },
+
+    { "120707566821838", 11 },
+    { "78033819494858", 11 },
+    { "140676449414912", 11 },
+    { "110443110984870", 11 },
+
+    { "122588953153331", 11 },
+    { "96876364727578", 11 },
+    { "112713273290013", 11 },
+    { "120356873550880", 11 },
+
+    { "109046196616583", 11 },
+    { "99671440217994", 11 },
+    { "117056254898527", 11 },
+    { "83926072519416", 11 },
+
+    { "100340119591423", 11 },
+
+    { "15020331138", 11 },
+    { "97650353173967", 11 },
+    { "108215795879947", 11 },
+    { "106779703045692", 11 },
+
+    { "127900505653302", 11 },
+    { "135002854074155", 11 },
+
+    { "102368590919131", 11 },
+    { "123523460902012", 11 },
+    { "121643179330060", 11 },
+    { "106863915470276", 11 },
+
+    { "98589724026580", 11 },
+    { "72957032443548", 11 },
+    { "71143980609439", 11 },
+    { "86360248354358", 11 },
+
+    { "110478475041750", 6.4 },
+    { "120226911812284", 6.4 },
+    { "114045266832365", 6.4 },
+    { "129181843143224", 6.4 },
+
+    -- ClientScythe
+    { "137192417828411", 20 },
+    { "82178492914389", 20 },
+    { "110104059913883", 20 },
+    { "125046985648394", 20 },
+
+    -- ClientGlaive
+    { "85600126814878", 11 },
+    { "103069496577497", 11 },
+    { "100661608460357", 11 },
+    { "112698938329906", 11 },
+
+    -- ClientShuriken
+    { "18688684452", 11 },
+    { "18688695013", 11 },
+    { "18688696874", 11 },
+    { "18688701221", 11 },
+
+    -- ClientGun
+    { "88425003522416", 11 },
+    { "132846161218593", 11 },
+    { "88021059553668", 11 },
+    { "107578843323292", 11 },
+
+    -- ClientOdachi
+    { "83597128763314", 11 },
+    { "137047162394430", 11 },
+    { "94363243870652", 11 },
+    { "96553492138332", 11 },
+
+    -- ClientVajra
+    { "100320805290287", 11 },
+    { "125839196983522", 11 },
+    { "82077868030086", 11 },
+    { "77135673684232", 11 },
+
+    -- ClientYoyo
+    { "18656512288", 11 },
+    { "18656720274", 11 },
+    { "18656912976", 11 },
+    { "18656957377", 11 },
+
+    -- ClientPistol
+    { "130380243017660", 11 },
+    { "83580858918756", 11 },
+    { "102445305459214", 11 },
+    { "137785367718179", 11 },
+
+    -- ClientBow
+    { "113228948659640", 11 },
+    { "119175814215285", 11 },
+    { "83189271119324", 11 },
+    { "86398337512941", 11 },
+
+    -- ClientDualSickles
+    { "118619999081644", 11 },
+    { "112850440007338", 11 },
+    { "127050422827369", 11 },
+    { "78073358490403", 11 },
+
+    -- ClientLantern
+    { "84000066130572", 11 },
+    { "135748620470989", 11 },
+    { "120037158730710", 11 },
+    { "117708351960670", 11 },
+
+    -- ClientKhakkhara
+    { "73932825743984", 11 },
+    { "75269638226144", 11 },
+    { "116360997934606", 11 },
+
+    -- ClientFurnace (removed dups)
+    { "85272236340876", 11 },
+
+    -- ClientChakrams (removed dups)
+    { "99447020480937", 11 },
+    { "84253723775152", 11 },
+
+    -- ClientSpear
+    { "98965913505650", 11 },
+    { "127127574087358", 11 },
+    { "118542350990952", 11 },
+    { "89810500644577", 11 },
+
+    -- ClientDeathCannon
+    { "18746249868", 11 },
+    { "18746251965", 11 },
+    { "18746253015", 11 },
+    { "18746254241", 11 },
+
+    -- ClientFan
+    { "107384648864181", 11 },
+    { "101722412373734", 11 },
+    { "76154209126659", 11 },
+    { "77267864075274", 11 },
+
+    -- ClientWitchHunter (removed dups)
+
+    -- RF category (removed duplicate entries below, these were the second occurrences with value 7)
+    { "79190651803938", 7 }, -- Glaive / Gun
+    { "123917579888288", 7 }, -- Shuriken
+    { "84762847716448", 7 }, -- Vajra
+    { "18657046837", 7 }, -- Yoyo
+    { "102655558672084", 7 }, -- Pistol
+    { "134977336114745", 7 }, -- Bow
+    { "111913090576921", 7 }, -- DualSickles
+    { "78008330402515", 7 }, -- Lantern
+    { "129618005224278", 7 }, -- Khakkhara / Furnace / Chakrams / ResShuriken
+    { "88414662529992", 7 }, -- Spear
+    { "120498298197036", 7 }, -- DeathCannon
+    { "82965522748627", 7 }, -- Fan
+
+
+    { "91603110047132", 25 }, -- RunningAttack
+{ "83615131377857", 25 }, -- ResonateRunningAttack
+
+-- ClientPartialShuriken
+{ "82648171349389", 25 }, -- RunningAttack
+{ "124020021208622", 25 }, -- ResonateRunningAttack
+
+-- ClientPartialGlaive
+{ "135058138903028", 25 }, -- RunningAttack
+{ "97207266978094", 25 }, -- ResonateRunningAttack
+
+-- ClientPartialDualSickles
+{ "140664404868723", 25 }, -- RunningAttack
+{ "119656879659915", 25 }, -- ResonateRunningAttack
+
+-- ClientPartialBow
+{ "112197821173920", 25 }, -- RunningAttack
+{ "87031697771282", 25 }, -- ResonateRunningAttack
+
+-- ClientPartialLantern
+{ "15679138353", 25 }, -- RunningAttack
+{ "17580900409", 25 }, -- ResonateRunningAttack
+
+-- ClientPartialPistol
+{ "94353897236211", 25 }, -- RunningAttack
+{ "79931669397382", 25 }, -- ResonateRunningAttack
+
+-- ClientPartialChainsaw
+{ "130537711811737", 25 }, -- RunningAttack
+{ "74660137362622", 25 }, -- ResonateRunningAttack
+
+-- ClientScythe
+{ "17599153919", 25 }, -- RunningAttack
+
+-- ClientGlaive
+{ "86373126011935", 25 }, -- RunningAttack
+{ "118571569345862", 25 }, -- ResonateRunningAttack
+
+-- ClientShuriken
+{ "83348124067271", 25 }, -- RunningAttack
+{ "18688765638", 25 }, -- ResonateRunningAttack
+
+-- ClientGun
+{ "97006683522678", 25 }, -- RunningAttack
+{ "71617562443363", 25 }, -- ResonateRunningAttack
+
+-- ClientOdachi
+{ "114867367806095", 25 }, -- RunningAttack
+{ "92011179781662", 25 }, -- ResonateRunningAttack
+
+-- ClientVajra
+{ "129446276561786", 25 }, -- RunningAttack
+{ "81001106572124", 25 }, -- ResonateRunningAttack
+
+-- ClientYoyo
+{ "18657022631", 25 }, -- RunningAttack
+{ "18673008011", 25 }, -- ResonateRunningAttack
+
+-- ClientPistol
+{ "79931669397382", 25 }, -- ResonateRunningAttack
+
+-- ClientBow
+{ "72568027883912", 25 }, -- RunningAttack
+{ "130386533050382", 25 }, -- ResonateRunningAttack
+
+-- ClientLantern
+{ "110493741308480", 25 }, -- RunningAttack
+{ "139983563914346", 25 }, -- ResonateRunningAttack
+
+-- Shared (Khakkhara / Furnace / Chakrams / ResShuriken)
+{ "102256748666332", 25 }, -- RunningAttack
+{ "115447323822288", 25 }, -- ResonateRunningAttack
+
+-- ClientFan
+{ "101083417937115", 25 }, -- RunningAttack
+{ "137727106597947", 25 }, -- ResonateRunningAttack
+
+-- ClientChainsaw
+{ "88535920899687", 25 }, -- RunningAttack
+{ "102534651322618", 25 }, -- ResonateRunningAttack
+
+{ "135237575623161", 40 },
+{ "86277254621912", 40 },
+{ "97412519242220", 30 },
+{ "95212348690056", 30 },
+{ "98966200959617", 25 },
+{ "79093778544895", 25 },
+{ "94378343844423", 20 },
+{ "139508129291920", 25 }
+}
+
+local CUSTOM_DISTANCE_MAP = {}
+for _, v in ipairs(CUSTOM_DISTANCE_IDS) do
+    local id = tostring(v[1])
+    local dist = tonumber(v[2])
+    if id and dist then
+        CUSTOM_DISTANCE_MAP[id] = dist
+    end
+end
+
+
+
+--======================================================
+-- UTIL
+--======================================================
+local function notify(t, msg)
+    if getgenv().WEBHOOK_MODE then
+        sendWebhook(t, msg)
+        return
+    end
+
+    StarterGui:SetCore("SendNotification", {
+        Title = t,
+        Text = msg,
+        Duration = 1.5
+    })
+end
+
+local function getRoot(char)
+	return char:FindFirstChild("HumanoidRootPart")
+		or char:FindFirstChild("UpperTorso")
+		or char:FindFirstChild("Torso")
+end
+
+local function fullUnlockCleanup()
+
+    genv.CURRENT_LOCKED_PLAYER = nil
+
+    if genv.LOCK_ANIMCONN_F then pcall(function() genv.LOCK_ANIMCONN_F:Disconnect() end) end
+    genv.LOCK_ANIMCONN_F = nil
+
+    -- DESTROY BILLBOARD + LABELS
+    if genv.LOCK_BILLBOARD then pcall(function() genv.LOCK_BILLBOARD:Destroy() end) end
+    if genv.LOCK_DELAY_LABEL then pcall(function() genv.LOCK_DELAY_LABEL:Destroy() end) end
+    if genv.LOCK_NAME_LABEL then pcall(function() genv.LOCK_NAME_LABEL:Destroy() end) end
+    if genv.LOCK_ID_LABEL then pcall(function() genv.LOCK_ID_LABEL:Destroy() end) end
+    if genv.LOCK_UNTRACKED_LABEL then pcall(function() genv.LOCK_UNTRACKED_LABEL:Destroy() end) end
+    if genv.LOCK_PARRIED_LABEL then pcall(function() genv.LOCK_PARRIED_LABEL:Destroy() end) end
+
+    genv.LOCK_BILLBOARD = nil
+    genv.LOCK_DELAY_LABEL = nil
+    genv.LOCK_NAME_LABEL = nil
+    genv.LOCK_ID_LABEL = nil
+    genv.LOCK_UNTRACKED_LABEL = nil
+    genv.LOCK_PARRIED_LABEL = nil
+
+    -- RESET MOVEMENT
+    getgenv().MOVEMENT_LOCK = false
+    getgenv().MACRO_INPUT_ACTIVE = false
+
+    -- RELEASE ONLY SCRIPT KEYS (not movement)
+    local VIM = game:GetService("VirtualInputManager")
+    local keys = {
+        Enum.KeyCode.F,
+        Enum.KeyCode.Q
+    }
+    for _, k in ipairs(keys) do
+        VIM:SendKeyEvent(false, k, false, game)
+    end
+end
+
+local function getClosestToMouse()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+
+    local myRoot = getRoot(char)
+    if not myRoot then return nil end
+
+    local bestTarget = nil
+    local bestDist = math.huge
+
+    local function tryCandidate(model)
+        if not model then return end
+        if not model:IsA("Model") then return end
+        if model == char then return end
+
+        -- must have humanoid
+        local hum = model:FindFirstChildWhichIsA("Humanoid")
+        if not hum then return end
+        if hum.Health <= 0 then return end
+
+        -- must have root
+        local root = getRoot(model)
+        if not root then return end
+
+        -- must have animator (prevents map parts)
+        local animator = hum:FindFirstChildOfClass("Animator")
+        if not animator then return end
+
+        -- must be visible
+        local pos, visible = Camera:WorldToViewportPoint(root.Position)
+        if not visible then return end
+
+        -- must be in range
+        local distWorld = (root.Position - myRoot.Position).Magnitude
+        if distWorld > LOCK_RANGE then return end
+
+        -- pixel distance to mouse
+        local distScreen = (Vector2.new(pos.X, pos.Y) - Vector2.new(Mouse.X, Mouse.Y)).Magnitude
+
+        if distScreen < bestDist then
+            bestDist = distScreen
+            bestTarget = model
+        end
+    end
+
+    -- players
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            tryCandidate(plr.Character)
+        end
+    end
+
+    -- npcs in workspace.Living
+    local living = workspace:FindFirstChild("Living")
+    if living then
+        for _, npc in ipairs(living:GetChildren()) do
+            tryCandidate(npc)
+        end
+    end
+
+    return bestTarget
+end
+
+
+--======================================================
+-- BILLBOARD UI
+--======================================================
+local function createBillboard(char)
+
+    -- If WEBHOOK_MODE = true, destroy UI + stop
+    if getgenv().WEBHOOK_MODE then
+        if genv.LOCK_BILLBOARD then pcall(function() genv.LOCK_BILLBOARD:Destroy() end) end
+        if genv.LOCK_DELAY_LABEL then pcall(function() genv.LOCK_DELAY_LABEL:Destroy() end) end
+        if genv.LOCK_NAME_LABEL then pcall(function() genv.LOCK_NAME_LABEL:Destroy() end) end
+        if genv.LOCK_ID_LABEL then pcall(function() genv.LOCK_ID_LABEL:Destroy() end) end
+
+        genv.LOCK_BILLBOARD = nil
+        genv.LOCK_DELAY_LABEL = nil
+        genv.LOCK_NAME_LABEL = nil
+        genv.LOCK_ID_LABEL = nil
+        return
+    end
+
+    local head =
+        char:FindFirstChild("Head") or
+        char:FindFirstChild("UpperTorso") or
+        char:FindFirstChild("Torso") or
+        char:FindFirstChild("HumanoidRootPart")
+
+    if not head then return end
+
+    local gui = Instance.new("BillboardGui")
+    gui.AlwaysOnTop = true
+    gui.Adornee = head
+    gui.Size = UDim2.new(0, 260, 0, 120)
+    gui.StudsOffset = Vector3.new(0, 5, 0)
+    gui.Parent = head
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+    ----------------------------------------------------------------
+    -- 🔥 THIS WAS MISSING IN YOUR SCRIPT
+    ----------------------------------------------------------------
+    genv.LOCK_BILLBOARD = gui
+    ----------------------------------------------------------------
+
+    -- === DELAY LABEL ===
+    -- === UNTRACKED LABEL (TOP, BLUE) ===
+    local untracked = Instance.new("TextLabel")
+    untracked.BackgroundTransparency = 1
+    untracked.Size = UDim2.new(1,0,0.25,0)
+    untracked.Position = UDim2.new(0,0,0,0)
+    untracked.TextScaled = true
+    untracked.Font = Enum.Font.GothamBold
+    untracked.TextColor3 = Color3.fromRGB(100,170,255)
+    untracked.Text = ""
+    untracked.Parent = gui
+    untracked.ZIndex = 1
+    genv.LOCK_UNTRACKED_LABEL = untracked
+
+    -- === DELAY LABEL ===
+    local delayLabel = Instance.new("TextLabel")
+    delayLabel.BackgroundTransparency = 1
+    delayLabel.Size = UDim2.new(1,0,0.25,0)
+    delayLabel.Position = UDim2.new(0,0,0.25,0)
+    delayLabel.TextScaled = true
+    delayLabel.Font = Enum.Font.GothamBold
+    delayLabel.TextColor3 = Color3.new(1,1,1)
+    delayLabel.Parent = gui
+    delayLabel.ZIndex = 1
+    genv.LOCK_DELAY_LABEL = delayLabel
+
+    -- === NAME LABEL ===
+    local name = Instance.new("TextLabel")
+    name.BackgroundTransparency = 1
+    name.Size = UDim2.new(1,0,0.25,0)
+    name.Position = UDim2.new(0,0,0.5,0)
+    name.TextScaled = true
+    name.Font = Enum.Font.GothamBold
+    name.TextColor3 = Color3.fromRGB(255,120,120)
+    name.Parent = gui
+    name.ZIndex = 1
+    genv.LOCK_NAME_LABEL = name
+
+    -- === ID LABEL ===
+    local id = Instance.new("TextLabel")
+    id.BackgroundTransparency = 1
+    id.Size = UDim2.new(1,0,0.25,0)
+    id.Position = UDim2.new(0,0,0.75,0)
+    id.TextScaled = true
+    id.Font = Enum.Font.Gotham
+    id.TextColor3 = Color3.new(1,1,1)
+    id.Parent = gui
+    id.ZIndex = 1
+    genv.LOCK_ID_LABEL = id
+
+    -- === PARRIED LABEL (above UNTRACKED, dark red) ===
+    local parried = Instance.new("TextLabel")
+    parried.BackgroundTransparency = 1
+    parried.Size = UDim2.new(1,0,0.25,0)
+    parried.Position = UDim2.new(0,0,-0.15,0)
+    parried.TextScaled = true
+    parried.Font = Enum.Font.GothamBold
+    parried.TextColor3 = Color3.fromRGB(150,20,20)
+    parried.Text = ""
+    parried.TextStrokeTransparency = 0
+    parried.TextStrokeColor3 = Color3.fromRGB(0,0,0)
+    parried.Parent = gui
+    parried.ZIndex = 10
+    genv.LOCK_PARRIED_LABEL = parried
+end
+
+----------------------------------------------------------------
+-- 🔥 POSTURE UPDATE SYSTEM — PLACE EXACTLY UNDER createBillboard()
+----------------------------------------------------------------
+-- posture display removed
+
+local function updateBillboard(id, delay)
+
+    -- WEBHOOK MODE
+    if getgenv().WEBHOOK_MODE then
+        local animName = getAnimName(id)
+
+        task.spawn(function()
+            sendWebhook(
+                "Animation Triggered",
+                "Anim: **" .. animName .. "**\n" ..
+                "ID: `" .. id .. "`\n" ..
+                "Delay: `" .. string.format("%.2f", delay) .. "`"
+            )
+        end)
+
+        return
+    end
+
+    -- If unlocked, do nothing
+    if not genv.CURRENT_LOCKED_PLAYER then return end
+
+    -- UI updates
+    if genv.LOCK_DELAY_LABEL then
+        genv.LOCK_DELAY_LABEL.Text = "Delay: " .. string.format("%.2f", delay)
+    end
+    if genv.LOCK_NAME_LABEL then
+        genv.LOCK_NAME_LABEL.Text = getAnimName(id)
+    end
+    if genv.LOCK_ID_LABEL then
+        genv.LOCK_ID_LABEL.Text = "ID: " .. id
+    end
+
+    ----------------------------------------------------
+    -- (posture removed) UI no longer displays posture
+    ----------------------------------------------------
+end
+
+
+local function press(k)
+	VirtualInput:SendKeyEvent(true, k, false, game)
+	VirtualInput:SendKeyEvent(false, k, false, game)
+end
+
+-- Hold F, click right mouse button, then release F
+-- Hold F, click right mouse button, then release F
+-- If alreadyHeld==true, assumes F is already held down and will only perform the click+release
+local function holdF_then_m2(alreadyHeld)
+    local VIM = VirtualInput
+    local viewport = Camera.ViewportSize
+
+    -- use center of screen (fixes missed clicks)
+    local x = viewport.X / 2
+    local y = viewport.Y / 2
+
+    if not alreadyHeld then
+        VIM:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+
+        -- make sure F is actually held
+        task.wait(0.2)
+        task.wait() -- extra frame (VERY IMPORTANT)
+    end
+
+    -- right click (longer = more consistent)
+    VIM:SendMouseButtonEvent(x, y, 1, true, game, 0)
+    task.wait(0.03)
+    VIM:SendMouseButtonEvent(x, y, 1, false, game, 0)
+
+    -- slight delay before releasing F
+    task.wait(0.02)
+
+    VIM:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+end
+
+local function press_R_plus_F(alreadyHeld)
+    local VIM = VirtualInput
+    if not alreadyHeld then
+        VIM:SendKeyEvent(true, Enum.KeyCode.R, false, game)
+        VIM:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+        task.wait(0.02)
+    end
+
+    -- short hold to ensure the game registers the combo
+    task.wait(0.01)
+
+    VIM:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+    VIM:SendKeyEvent(false, Enum.KeyCode.R, false, game)
+
+    -- left click 0.5s after RF releases
+    task.spawn(function()
+        task.wait(0.2)
+        local viewport = Camera.ViewportSize
+        local x = viewport.X / 2
+        local y = viewport.Y / 2
+        VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
+        task.wait(0.02)
+        VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    end)
+end
+
+
+-- Detect whether any descendant named "Highlight" exists under the local player's character
+local function hasHighlight()
+    local char = LocalPlayer and LocalPlayer.Character
+    if not char then return false end
+    return char:FindFirstChild("Highlight", true) ~= nil
+end
+
+
+-- Hold F, wait a short delay, left-click, then release F
+local function holdF_then_lclick(alreadyHeld, leftDelay)
+    leftDelay = tonumber(leftDelay) or 0.2
+    local VIM = VirtualInput
+    local viewport = Camera.ViewportSize
+
+    -- use center of screen for consistent clicks
+    local x = viewport.X / 2
+    local y = viewport.Y / 2
+
+    if not alreadyHeld then
+        VIM:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+
+        -- ensure F is actually held
+        task.wait(0.03)
+        task.wait()
+    end
+
+    -- wait the requested delay then left-click
+    task.wait(leftDelay)
+    VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
+    task.wait(0.02)
+    VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+
+    -- slight delay before releasing F
+    task.wait(0.02)
+    VIM:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+end
+
+
+local function hookAnimationsAuto(model)
+    local hum = model:FindFirstChildWhichIsA("Humanoid")
+    if not hum then return end
+
+    local animator = hum:FindFirstChildOfClass("Animator")
+        or Instance.new("Animator", hum)
+
+        -- 🔥 If the target dies, disconnect animations IMMEDIATELY
+        hum.Died:Connect(function()
+            fullUnlockCleanup()
+        end)
+
+    createBillboard(model)
+
+    ----------------------------------------------------------------
+    -- F SYSTEM (works for players and NPCs)
+    ----------------------------------------------------------------
+    genv.LOCK_ANIMCONN_F =
+        animator.AnimationPlayed:Connect(function(track)
+
+            local id = tostring(track.Animation.AnimationId or ""):match("%d+")
+            if not id then return end
+
+            -- 🔥 UNTRACKED ANIMATION LOGGING (includes RF category)
+            if not LOOKUP_F[id] and not LOOKUP_F_BEFORE[id] and not CUSTOM_DELAY_MAP[id] and not CUSTOM_BEFORE_MAP[id]
+                and not LOOKUP_RF[id] and not LOOKUP_RF_BEFORE[id] and not CUSTOM_DELAY_RF_MAP[id] and not CUSTOM_BEFORE_RF_MAP[id] then
+                logUntrackedAnimation(id, model)
+            end
+
+            -- Only continue if this animation is tracked in either F or RF categories
+            if not (LOOKUP_F[id] or LOOKUP_F_BEFORE[id] or CUSTOM_DELAY_MAP[id] or CUSTOM_BEFORE_MAP[id]
+                or LOOKUP_RF[id] or LOOKUP_RF_BEFORE[id] or CUSTOM_DELAY_RF_MAP[id] or CUSTOM_BEFORE_RF_MAP[id]) then
+                return
+            end
+
+            -- FIRST: handle before-end category (press F or RF some seconds BEFORE anim ends)
+            if LOOKUP_F_BEFORE[id] or CUSTOM_BEFORE_MAP[id] or LOOKUP_RF_BEFORE[id] or CUSTOM_BEFORE_RF_MAP[id] then
+                local isRF = (LOOKUP_RF[id] or LOOKUP_RF_BEFORE[id] or CUSTOM_DELAY_RF_MAP[id] or CUSTOM_BEFORE_RF_MAP[id])
+                local beforeDelays = isRF and getBeforeDelayRF(id, RF_BEFORE_DEFAULT) or getBeforeDelay(id, F_BEFORE_DEFAULT)
+                if type(beforeDelays) ~= "table" then beforeDelays = { beforeDelays } end
+
+                -- EARLY DISTANCE + GRACE RANGE CHECK
+                local extraDelayPenalty = 0
+                local maxDist = CUSTOM_DISTANCE_MAP[id] or F_RANGE
+                do
+                    local myChar = LocalPlayer.Character
+                    local myRoot = myChar and getRoot(myChar)
+                    local targetRoot = model and getRoot(model)
+                    if myRoot and targetRoot then
+                        local distNow = (targetRoot.Position - myRoot.Position).Magnitude
+                        if distNow > (maxDist + GRACE_DISTANCE) then
+                            -- Beyond grace range, skip entire animation
+                            return
+                        elseif distNow > maxDist then
+                            -- Within grace range but beyond normal; apply delay penalty
+                            extraDelayPenalty = EXTENDED_RANGE_DELAY_PENALTY
+                        end
+                    end
+                end
+
+                for _, bd in ipairs(beforeDelays) do
+                    local before = bd
+                    local adjustedBefore = adjustDelay(before, true)
+                    updateBillboard(id, adjustedBefore)
+
+                    task.spawn(function()
+                        local length = nil
+                        pcall(function() length = track.Length end)
+                        if not length then pcall(function() length = track.TimeLength end) end
+
+                        -- Wait up to 0.1s for length to become available
+                        if not length or length == 0 then
+                            task.wait(0.05)
+                            pcall(function() length = track.Length end)
+                            if not length then pcall(function() length = track.TimeLength end) end
+                        end
+
+                        -- Fallback: if still no length, handle timed hold + action
+                        if not length or length == 0 then
+                            -- start holding slightly earlier than the timed press
+                            local HOLD_EARLY = 0.05
+                            local toWait = adjustedBefore - HOLD_EARLY + extraDelayPenalty
+                            if toWait > 0 then task.wait(toWait) end
+
+                            if genv.CURRENT_LOCKED_PLAYER ~= model then return end
+                            local myChar = LocalPlayer.Character
+                            if not myChar then return end
+                            local myRoot = getRoot(myChar)
+                            local targetRoot = getRoot(model)
+                            if not myRoot or not targetRoot then return end
+                            local maxDist = (isRF and CUSTOM_DISTANCE_MAP[id]) or CUSTOM_DISTANCE_MAP[id] or F_RANGE
+                            local dist = (targetRoot.Position - myRoot.Position).Magnitude
+                            local highlightPresent = hasHighlight()
+                            if dist <= (maxDist + GRACE_DISTANCE) then
+                                if isRF then
+                                    -- hold R+F briefly then release
+                                    press_R_plus_F()
+                                else
+                                    -- If a Highlight exists on our character, press F then left-click
+                                    if highlightPresent then
+                                        holdF_then_lclick(false, 0.25)
+                                    else
+                                        -- hold F then perform right-click and release
+                                        holdF_then_m2()
+                                    end
+                                end
+                                -- show parried label briefly
+                                if genv.LOCK_PARRIED_LABEL then
+                                    genv.LOCK_PARRIED_LABEL.Text = "Parried"
+                                    task.spawn(function()
+                                        task.wait(0.5)
+                                        if genv.LOCK_PARRIED_LABEL then genv.LOCK_PARRIED_LABEL.Text = "" end
+                                    end)
+                                end
+                            end
+                            return
+                        end
+
+                        -- compute the exact target time in the animation when we want to trigger
+                        -- Apply extra delay penalty if hit from beyond normal range
+                        local baseTargetTime = math.max(0, length - adjustedBefore + extraDelayPenalty)
+                        local HOLD_EARLY = 0.04
+                        local held = false
+                        local triggered = false
+
+                        local startClock = os.clock()
+                        local timeout = math.max(5, length + 5)
+
+                        while true do
+                            if genv.CURRENT_LOCKED_PLAYER ~= model then
+                                if held then
+                                    if isRF then
+                                        VirtualInput:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                                        VirtualInput:SendKeyEvent(false, Enum.KeyCode.R, false, game)
+                                    else
+                                        VirtualInput:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                                    end
+                                end
+                                return
+                            end
+
+                            local timePos = nil
+                            pcall(function() timePos = track.TimePosition end)
+
+                            local targetTime = baseTargetTime
+
+                            if timePos then
+                                if (not held) and timePos >= math.max(0, targetTime - HOLD_EARLY) then
+                                    held = true
+                                    if isRF then
+                                        VirtualInput:SendKeyEvent(true, Enum.KeyCode.R, false, game)
+                                        VirtualInput:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+                                    else
+                                        VirtualInput:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+                                    end
+                                end
+
+                                if timePos >= targetTime then
+                                    triggered = true
+                                    break
+                                end
+                            end
+
+                            if os.clock() - startClock > timeout then
+                                break
+                            end
+
+                            task.wait(0.01)
+                        end
+
+                        if not triggered then
+                            if held then
+                                if isRF then
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.R, false, game)
+                                else
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                                end
+                            end
+                            return
+                        end
+
+                        if genv.CURRENT_LOCKED_PLAYER ~= model then
+                            if held then
+                                if isRF then
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.R, false, game)
+                                else
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                                end
+                            end
+                            return
+                        end
+
+                        local myChar = LocalPlayer.Character
+                        if not myChar then
+                            if held then
+                                if isRF then
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.R, false, game)
+                                else
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                                end
+                            end
+                            return
+                        end
+                        local myRoot = getRoot(myChar)
+                        local targetRoot = getRoot(model)
+                        if not myRoot or not targetRoot then
+                            if held then
+                                if isRF then
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.R, false, game)
+                                else
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                                end
+                            end
+                            return
+                        end
+
+                        local maxDist = (isRF and CUSTOM_DISTANCE_MAP[id]) or CUSTOM_DISTANCE_MAP[id] or F_RANGE
+                        local dist = (targetRoot.Position - myRoot.Position).Magnitude
+                        local highlightPresent = hasHighlight()
+                        if dist <= (maxDist + GRACE_DISTANCE) then
+                            -- perform RF or F action while keys are held, then release
+                            if isRF then
+                                press_R_plus_F(true)
+                            else
+                                if highlightPresent then
+                                    holdF_then_lclick(true, 0.25)
+                                else
+                                    holdF_then_m2(true)
+                                end
+                            end
+                            if genv.LOCK_PARRIED_LABEL then
+                                genv.LOCK_PARRIED_LABEL.Text = "Parried"
+                                task.spawn(function()
+                                    task.wait(0.5)
+                                    if genv.LOCK_PARRIED_LABEL then genv.LOCK_PARRIED_LABEL.Text = "" end
+                                end)
+                            end
+                        else
+                            if held then
+                                if isRF then
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.R, false, game)
+                                else
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                                end
+                            end
+                        end
+                    end)
+                end
+
+                return
+            end
+
+            -- SECOND: start-based timing (trigger at a delay from animation start)
+            -- MULTIPLE DELAYS SUPPORT - supports F and RF categories
+            local isRF = (LOOKUP_RF[id] or LOOKUP_RF_BEFORE[id] or CUSTOM_DELAY_RF_MAP[id] or CUSTOM_BEFORE_RF_MAP[id])
+            local delays = isRF and (CUSTOM_DELAY_RF_MAP[id] or {RF_DEFAULT_DELAY}) or (CUSTOM_DELAY_MAP[id] or {F_DEFAULT_DELAY})
+
+            for _, d in ipairs(delays) do
+                local delay = adjustDelay(d)
+
+                updateBillboard(id, delay)
+
+                task.spawn(function()
+                    if genv.CURRENT_LOCKED_PLAYER ~= model then return end
+
+                    -- RANGE CHECK with GRACE DISTANCE + PENALTY
+                    local myChar = LocalPlayer.Character
+                    if not myChar then return end
+
+                    local myRoot = getRoot(myChar)
+                    local targetRoot = getRoot(model)
+                    if not myRoot or not targetRoot then return end
+
+                    local maxDist = F_RANGE
+                    if not isRF and CUSTOM_DELAY_MAP[id] and CUSTOM_DISTANCE_MAP[id] then
+                        maxDist = CUSTOM_DISTANCE_MAP[id]
+                    elseif isRF and CUSTOM_DELAY_RF_MAP[id] and CUSTOM_DISTANCE_MAP[id] then
+                        maxDist = CUSTOM_DISTANCE_MAP[id]
+                    end
+
+                    local dist = (targetRoot.Position - myRoot.Position).Magnitude
+                    local extraDelayPenalty = 0
+                    
+                    if dist > (maxDist + GRACE_DISTANCE) then
+                        -- Beyond grace range, skip this animation
+                        return
+                    elseif dist > maxDist then
+                        -- Within grace range but beyond normal; apply delay penalty
+                        extraDelayPenalty = EXTENDED_RANGE_DELAY_PENALTY
+                    end
+
+                    -- compute exact target time (seconds from the animation start)
+                    local targetTime = math.max(0, delay + extraDelayPenalty)
+                    local HOLD_EARLY = 0.04
+                    local held = false
+                    local triggered = false
+
+                    local startClock = os.clock()
+                    local timeout = math.max(3, targetTime + 3)
+
+                    while true do
+                        if genv.CURRENT_LOCKED_PLAYER ~= model then
+                            if held then
+                                if isRF then
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.R, false, game)
+                                else
+                                    VirtualInput:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                                end
+                            end
+                            return
+                        end
+
+                        local timePos = nil
+                        pcall(function() timePos = track.TimePosition end)
+
+                        if timePos then
+                            if (not held) and timePos >= math.max(0, targetTime - HOLD_EARLY) then
+                                held = true
+                                if isRF then
+                                    VirtualInput:SendKeyEvent(true, Enum.KeyCode.R, false, game)
+                                    VirtualInput:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+                                else
+                                    VirtualInput:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+                                end
+                            end
+
+                            if timePos >= targetTime then
+                                triggered = true
+                                break
+                            end
+                        end
+
+                        if os.clock() - startClock > timeout then
+                            break
+                        end
+
+                        task.wait(0.01)
+                    end
+
+                    if not triggered then
+                        if held then
+                            if isRF then
+                                VirtualInput:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                                VirtualInput:SendKeyEvent(false, Enum.KeyCode.R, false, game)
+                            else
+                                VirtualInput:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                            end
+                        end
+                        return
+                    end
+
+                    -- perform RF or F action while keys are held, then release
+                    if isRF then
+                        press_R_plus_F(true)
+                    else
+                        if hasHighlight() then
+                            holdF_then_lclick(true, 0.2)
+                        else
+                            holdF_then_m2(true)
+                        end
+                    end
+
+                    if genv.LOCK_PARRIED_LABEL then
+                        genv.LOCK_PARRIED_LABEL.Text = "Parried"
+                        task.spawn(function()
+                            task.wait(0.5)
+                            if genv.LOCK_PARRIED_LABEL then genv.LOCK_PARRIED_LABEL.Text = "" end
+                        end)
+                    end
+                end)
+
+            end
+
+            end) -- CLOSES animator.AnimationPlayed (F SYSTEM)
+
+end
+
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    -- small delay to ensure humanoid/animator exist
+    task.wait(0.05)
+    hookLocalAnimations(char)
+end)
+
+--======================================================
+-- LOCK KEY (T)
+--======================================================
+genv.LOCK_KEY_CONN =
+	UIS.InputBegan:Connect(function(input, gp)
+		if gp or input.KeyCode ~= LOCK_KEY then return end
+
+		if genv.CURRENT_LOCKED_PLAYER then
+			notify("Unlock", "Stopped Locking")
+			fullUnlockCleanup()
+			return
+		end
+
+		local target = getClosestToMouse()
+		if not target then
+			notify("Lock Failed", "No target near cursor")
+			return
+		end
+
+		fullUnlockCleanup()
+        hookAnimationsAuto(target)
+        if genv.CURRENT_LOCKED_PLAYER == target then
+            return
+        end
+
+        genv.CURRENT_LOCKED_PLAYER = target
+		notify("Locked On", target.Name)
+	end)
+
+    --======================================================
+-- 🔓 AUTO-UNLOCK WATCHDOG (TARGET OR YOU DIE)
+--======================================================
+task.spawn(function()
+    while task.wait(0.25) do
+        
+        local target = getgenv().CURRENT_LOCKED_PLAYER
+        if not target then continue end
+
+        -- 1) Target removed
+        if not target.Parent then
+            notify("Auto Unlock", "Target removed")
+            fullUnlockCleanup()
+            continue
+        end
+
+        -- 2) Target humanoid died
+        local hum = target:FindFirstChildWhichIsA("Humanoid")
+        if not hum or hum.Health <= 0 then
+            fullUnlockCleanup()
+            notify("Auto Unlock", "Target died")
+            continue
+        end
+
+        -- 3) YOU died
+        local lp = game:GetService("Players").LocalPlayer
+        if lp.Character then
+            local myHum = lp.Character:FindFirstChildWhichIsA("Humanoid")
+            if not myHum or myHum.Health <= 0 then
+                fullUnlockCleanup()
+                notify("Auto Unlock", "You died")
+                continue
+            end
+        end
+    end
+end)
